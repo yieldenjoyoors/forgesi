@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/yieldenjoyoors/forgesi/internal/cob"
 )
 
 // Options configures the knot surface. Host is the public origin without a
@@ -18,19 +20,33 @@ type Options struct {
 	// PublicKeyMultibase is the knot's signing key (secp256k1, compressed,
 	// multibase base58btc). Empty disables the verificationMethod entry.
 	PublicKeyMultibase string
+	// Auth verifies write callers. DevAuthorizer for local development;
+	// the ES256K service-auth verifier in production.
+	Auth Authorizer
 }
 
 // Knot serves the wire surface. Storage bindings attach in M2/M3; M1 is the
 // identity layer every Tangled consumer probes first.
 type Knot struct {
-	opt Options
-	mux *http.ServeMux
+	opt      Options
+	mux      *http.ServeMux
+	store    *cob.Store
+	registry *repoRegistry
 }
 
-// New builds the knot handler.
+// New builds the knot handler. A nil Auth fails closed: every write is
+// 401 until a real authorizer is wired.
 func New(opt Options) *Knot {
-	k := &Knot{opt: opt, mux: http.NewServeMux()}
+	if opt.Auth == nil {
+		opt.Auth = RejectAuthorizer{}
+	}
+	st, err := cob.New(cob.NewMemoryBackend(), "did:web:"+opt.Host)
+	if err != nil {
+		panic(err) // construction cannot fail today; see cob.New
+	}
+	k := &Knot{opt: opt, mux: http.NewServeMux(), store: st, registry: newRepoRegistry()}
 	k.routes()
+	k.records()
 	return k
 }
 
@@ -43,6 +59,12 @@ func (k *Knot) routes() {
 func (k *Knot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.mux.ServeHTTP(w, r)
 }
+
+// rejectAuthorizer denies everything.
+type RejectAuthorizer struct{}
+
+// Authorize implements Authorizer (always unauthenticated).
+func (RejectAuthorizer) Authorize(*http.Request) string { return "" }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -2,17 +2,21 @@
 
 **Git hosting where agents do the work.**
 
-ForgeSI is a [Tangled](https://tangled.org) knot — a federated git host speaking
-the AT Protocol — running entirely on Cloudflare, with an agent fleet attached:
-humans write intent as todo lines, an orchestrator assigns them, agents push
-branches, and proposals (tickets + patches, in the Tangled model) get
-machine-reviewed before a human ever looks.
+## What ForgeSI is
 
-Everything is git. Issues, pull requests, comments and labels are collaborative
-objects stored in the repository itself. Code lives as ordinary git objects in
-Cloudflare Artifacts. No VMs, no SSH daemons, no external databases.
+Three things, one system:
 
-## Concepts (what this is)
+1. **A knot** — a Tangled git host speaking the AT Protocol: federated,
+   public repos; issues, pull requests, comments and labels as collaborative
+   objects stored in the repository itself; code as ordinary git objects in
+   Cloudflare Artifacts. No VMs, no SSH daemons, no external databases.
+2. **A client** — the ForgeSI console: the deck where humans see the fleet,
+   the todo board, proposals with machine verdicts. Consumes knot data like
+   any Tangled client would.
+3. **An agent harness** — the fleet that does the work: orchestrator,
+   sandboxed agent runs, machine review.
+
+## How it works (concepts)
 
 1. **Write intent.** A todo is a line in `todo.md` at the repo root. One line,
    one task, versioned like everything else.
