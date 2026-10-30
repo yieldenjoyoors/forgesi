@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  knot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Gates
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+
+      - name: Build wasm (the shippable artifact must compile)
+        run: |
+          go install github.com/syumai/workers-go/cmd/workers-assets-gen@v0.36.1-0.20260923184945-a38be30753a4
+          workers-assets-gen -mode=go -o dist-gen
+          GOOS=js GOARCH=wasm go build -trimpath -o dist-gen/app.wasm ./cmd/worker

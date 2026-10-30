@@ -1,0 +1,23 @@
+{
+  // ForgeSI knot: a Tangled knot on Cloudflare. Go wasm worker; git objects
+  // land in Artifacts (M2), the firehose in a Durable Object (M3).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "forgesi-knot",
+  "main": "dist-gen/worker.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_als"],
+
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": true }
+  },
+
+  "rules": [
+    { "type": "ESModule", "globs": ["**/*.wasm"], "fallthrough": true }
+  ],
+
+  "vars": {
+    "KNOT_HOST": "knot.forgesi.org",
+    "KNOT_VERSION": "0.1.0"
+  }
+}
