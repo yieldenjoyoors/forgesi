@@ -39,6 +39,10 @@ func encode(out *[]byte, v any) error {
 	case string:
 		encodeHead(out, 0x60, uint64(len(x)))
 		*out = append(*out, x...)
+	case []byte:
+		// CBOR byte strings (major 0x40) — CAR payloads in event frames.
+		encodeHead(out, 0x40, uint64(len(x)))
+		*out = append(*out, x...)
 	case int:
 		encodeInt(out, int64(x))
 	case int64:
@@ -133,4 +137,131 @@ func CIDString(b []byte) (string, error) {
 	cid = append(cid, sum[:]...)
 	enc := base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 	return "b" + enc.EncodeToString(cid), nil
+}
+
+// Decode reads the first DAG-CBOR value from b, returning it and the rest.
+// Supports the subset Encode produces.
+func Decode(b []byte) (any, []byte, error) {
+	v, rest, err := decodeValue(b)
+	if err != nil {
+		return nil, nil, err
+	}
+	return v, rest, nil
+}
+
+func decodeValue(b []byte) (any, []byte, error) {
+	if len(b) < 1 {
+		return nil, nil, fmt.Errorf("dagcbor: empty")
+	}
+	major := b[0] & 0xe0
+	arg := b[0] & 0x1f
+	val, rest, err := readArg(b[1:], arg)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch major {
+	case 0x00:
+		return val, rest, nil
+	case 0x20:
+		n, ok := val.(uint64)
+		if !ok {
+			return nil, nil, fmt.Errorf("dagcbor: bad negative")
+		}
+		return -1 - int64(n), rest, nil
+	case 0x60:
+		n, ok := val.(uint64)
+		if !ok || uint64(len(rest)) < n {
+			return nil, nil, fmt.Errorf("dagcbor: bad string")
+		}
+		return string(rest[:n]), rest[n:], nil
+	case 0x40:
+		n, ok := val.(uint64)
+		if !ok || uint64(len(rest)) < n {
+			return nil, nil, fmt.Errorf("dagcbor: bad bytes")
+		}
+		return rest[:n], rest[n:], nil
+	case 0x80:
+		n, _ := val.(uint64)
+		if _, ok := val.(uint64); !ok {
+			return nil, nil, fmt.Errorf("dagcbor: bad array")
+		}
+		out := make([]any, 0, n)
+		for i := uint64(0); i < n; i++ {
+			var item any
+			item, rest, err = decodeValue(rest)
+			if err != nil {
+				return nil, nil, err
+			}
+			out = append(out, item)
+		}
+		return out, rest, nil
+	case 0xa0:
+		n, ok := val.(uint64)
+		if !ok {
+			return nil, nil, fmt.Errorf("dagcbor: bad map")
+		}
+		out := map[string]any{}
+		for i := uint64(0); i < n; i++ {
+			var k any
+			k, rest, err = decodeValue(rest)
+			if err != nil {
+				return nil, nil, err
+			}
+			v, vrest, err2 := decodeValue(rest)
+			if err2 != nil {
+				return nil, nil, err2
+			}
+			rest = vrest
+			ks, ok := k.(string)
+			if !ok {
+				return nil, nil, fmt.Errorf("dagcbor: non-string key")
+			}
+			out[ks] = v
+		}
+		return out, rest, nil
+	case 0xe0:
+		switch arg {
+		case 20:
+			return false, rest, nil
+		case 21:
+			return true, rest, nil
+		case 22:
+			return nil, rest, nil
+		}
+		return nil, nil, fmt.Errorf("dagcbor: simple %d unsupported", arg)
+	case 0xfb:
+		if len(rest) < 8 {
+			return nil, nil, fmt.Errorf("dagcbor: short float")
+		}
+		return math.Float64frombits(binary.BigEndian.Uint64(rest[:8])), rest[8:], nil
+	}
+	return nil, nil, fmt.Errorf("dagcbor: major %x unsupported", major)
+}
+
+func readArg(b []byte, arg byte) (any, []byte, error) {
+	switch {
+	case arg < 24:
+		return uint64(arg), b, nil
+	case arg == 24:
+		if len(b) < 1 {
+			return nil, nil, fmt.Errorf("dagcbor: short u8")
+		}
+		return uint64(b[0]), b[1:], nil
+	case arg == 25:
+		if len(b) < 2 {
+			return nil, nil, fmt.Errorf("dagcbor: short u16")
+		}
+		return uint64(binary.BigEndian.Uint16(b[:2])), b[2:], nil
+	case arg == 26:
+		if len(b) < 4 {
+			return nil, nil, fmt.Errorf("dagcbor: short u32")
+		}
+		return uint64(binary.BigEndian.Uint32(b[:4])), b[4:], nil
+	case arg == 27:
+		if len(b) < 8 {
+			return nil, nil, fmt.Errorf("dagcbor: short u64")
+		}
+		return binary.BigEndian.Uint64(b[:8]), b[8:], nil
+	}
+	return nil, nil, fmt.Errorf("dagcbor: bad arg %d", arg)
 }

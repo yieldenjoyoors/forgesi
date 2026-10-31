@@ -369,10 +369,15 @@ func (k *Knot) publishRefsRecord(acc *repoAccount, editor string) {
 		"refs":          sb.String(),
 		"createdAt":     time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := k.store.Get(acc.Did, "org.tangled.git.refs", "self"); err == nil {
-		_, _ = k.store.Put(acc.Did, "org.tangled.git.refs", "self", record, "", editor)
+	var wrote cob.Write
+	var werr error
+	if _, gerr := k.store.Get(acc.Did, "org.tangled.git.refs", "self"); gerr == nil {
+		wrote, werr = k.store.Put(acc.Did, "org.tangled.git.refs", "self", record, "", editor)
 	} else {
-		_, _ = k.store.Create(acc.Did, "org.tangled.git.refs", "self", record, editor)
+		wrote, werr = k.store.Create(acc.Did, "org.tangled.git.refs", "self", record, editor)
+	}
+	if werr == nil {
+		k.emit(acc.Did, "commit", "org.tangled.git.refs", "self", wrote.CID, wrote.Change, record)
 	}
 }
 

@@ -287,6 +287,9 @@ func (k *Knot) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := k.store.Create(body.Repo, body.Collection, body.Rkey, body.Record, editor)
+	if err == nil {
+		k.emit(body.Repo, "commit", body.Collection, res.Rkey, res.CID, res.Change, body.Record)
+	}
 	k.writeCobResult(w, res, err)
 }
 
@@ -296,6 +299,9 @@ func (k *Knot) handlePutRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := k.store.Put(body.Repo, body.Collection, body.Rkey, body.Record, body.SwapRecord, editor)
+	if err == nil {
+		k.emit(body.Repo, "commit", body.Collection, body.Rkey, res.CID, res.Change, body.Record)
+	}
 	k.writeCobResult(w, res, err)
 }
 
@@ -305,6 +311,9 @@ func (k *Knot) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := k.store.Delete(body.Repo, body.Collection, body.Rkey, body.SwapRecord, editor)
+	if err == nil {
+		k.emit(body.Repo, "commit", body.Collection, body.Rkey, res.CID, res.Change, nil)
+	}
 	k.writeCobResult(w, res, err)
 }
 

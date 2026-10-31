@@ -66,6 +66,8 @@ func New(opt Options) *Knot {
 	k.routes()
 	k.records()
 	k.gitRoutes()
+	k.firehoseRoutes()
+	k.didDocRoutes()
 	return k
 }
 
