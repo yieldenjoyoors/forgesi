@@ -147,3 +147,29 @@ func TestBase58Roundtrip(t *testing.T) {
 		t.Error("base58 roundtrip drifted")
 	}
 }
+
+// A minted token must verify with the matching key and claims — the
+// round-trip the agent fleet's push flow depends on.
+func TestMintVerifyRoundtrip(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	multibase := "z" + Base58Encode(priv.PubKey().SerializeCompressed())
+	now := time.Now()
+	token, err := Mint(priv, "did:web:forgesi.org:repo:demo", "did:web:forgesi.org",
+		"org.tangled.git.receivePack", time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Verifier{ResolveDID: func(did string) (*DIDDoc, error) {
+		return &DIDDoc{Keys: []DIDKey{{ID: did + "#k", Type: "EcdsaSecp256k1VerificationKey2019", Multibase: multibase}}}, nil
+	}, Now: func() time.Time { return now }}
+	got, err := v.Verify(token, "did:web:forgesi.org", "org.tangled.git.receivePack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "did:web:forgesi.org:repo:demo" {
+		t.Errorf("iss = %s", got)
+	}
+}

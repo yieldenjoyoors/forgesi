@@ -3,6 +3,8 @@ package knot
 import (
 	"net/http"
 	"strings"
+
+	"github.com/yieldenjoyoors/forgesi/internal/atauth"
 )
 
 // didDocRoutes serves DID documents for the repo DIDs the knot mints:
@@ -25,7 +27,7 @@ func (k *Knot) handleRepoDidDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "NotFound", "no such repo")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	doc := map[string]any{
 		"@context": "https://www.w3.org/ns/did/v1",
 		"id":       did,
 		"service": []any{map[string]any{
@@ -33,5 +35,14 @@ func (k *Knot) handleRepoDidDoc(w http.ResponseWriter, r *http.Request) {
 			"type":            "TangledKnot",
 			"serviceEndpoint": k.origin(),
 		}},
-	})
+	}
+	if k.opt.MintKey != nil {
+		doc["verificationMethod"] = []any{map[string]any{
+			"id":                 did + "#knot_key",
+			"type":               "EcdsaSecp256k1VerificationKey2019",
+			"controller":         did,
+			"publicKeyMultibase": "z" + atauth.Base58Encode(k.opt.MintKey.PubKey().SerializeCompressed()),
+		}}
+	}
+	writeJSON(w, http.StatusOK, doc)
 }

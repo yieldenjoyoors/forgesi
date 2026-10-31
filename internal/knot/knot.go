@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+
 	"github.com/yieldenjoyoors/forgesi/internal/cob"
 )
 
@@ -28,6 +30,10 @@ type Options struct {
 	// production; nil falls back to in-memory — unit tests only, since
 	// isolates share nothing).
 	DB *sql.DB
+	// MintKey signs repo push tokens (org.tangled.repo.mintToken). When
+	// set, repo DID documents carry its public half so standard service-auth
+	// verification accepts minted tokens.
+	MintKey *btcec.PrivateKey
 }
 
 // Knot serves the wire surface. Storage bindings attach in M2/M3; M1 is the
@@ -69,6 +75,7 @@ func New(opt Options) *Knot {
 	k.firehoseRoutes()
 	k.didDocRoutes()
 	k.wsRoutes()
+	k.mintRoutes()
 	return k
 }
 

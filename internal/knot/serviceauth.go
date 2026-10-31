@@ -27,3 +27,17 @@ func (s ServiceAuth) Authorize(r *http.Request, aud string) string {
 	}
 	return did
 }
+
+// AuthorizeGitPush verifies a push token: aud = the knot DID, lxm scoped
+// to org.tangled.git.receivePack (the only method git push ever needs).
+func (s ServiceAuth) AuthorizeGitPush(r *http.Request, aud string) string {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") {
+		return ""
+	}
+	did, err := s.V.Verify(strings.TrimPrefix(h, "Bearer "), aud, "org.tangled.git.receivePack")
+	if err != nil {
+		return ""
+	}
+	return did
+}

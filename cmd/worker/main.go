@@ -7,10 +7,13 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/btcsuite/btcd/btcec/v2"
 
 	workers "github.com/syumai/workers-go"
 	"github.com/syumai/workers-go/cloudflare"
@@ -37,11 +40,13 @@ func main() {
 	case "service":
 		auth = knot.ServiceAuth{V: &atauth.Verifier{ResolveDID: resolveDID, Now: time.Now}}
 	}
+	mintKey := loadMintKey()
 	workers.Serve(knot.New(knot.Options{
 		Host:    strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
 		Version: envOr("KNOT_VERSION", "0.1.0"),
 		Auth:    auth,
 		DB:      db,
+		MintKey: mintKey,
 	}))
 }
 
@@ -91,4 +96,20 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadMintKey reads the KNOT_SIGNING_KEY secret (32-byte scalar hex) —
+// the key that signs repo push tokens; its public half lands in repo DID
+// documents.
+func loadMintKey() *btcec.PrivateKey {
+	hexKey := strings.TrimSpace(cloudflare.Getenv("KNOT_SIGNING_KEY"))
+	if hexKey == "" {
+		return nil
+	}
+	raw, err := hex.DecodeString(hexKey)
+	if err != nil || len(raw) != 32 {
+		return nil
+	}
+	priv, _ := btcec.PrivKeyFromBytes(raw)
+	return priv
 }

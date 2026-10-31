@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	btcecsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 )
 
 // DIDDoc is the minimal DID document shape verification needs.
@@ -199,3 +200,23 @@ func ParseDIDDoc(body []byte) (*DIDDoc, error) {
 	}
 	return out, nil
 }
+
+// Mint signs a service-auth JWT with the given secp256k1 private key —
+// the knot mints short-lived push tokens for the repos it hosts
+// (org.tangled.repo.mintToken): iss = repo DID, aud = knot DID,
+// lxm = the git push scope.
+func Mint(priv *btcec.PrivateKey, iss, aud, lxm string, ttl time.Duration, now time.Time) (string, error) {
+	header := `{"typ":"JWT","alg":"ES256K"}`
+	claims := fmt.Sprintf(`{"iss":%q,"aud":%q,"exp":%d,"lxm":%q}`, iss, aud, now.Add(ttl).Unix(), lxm)
+	signing := b64url([]byte(header)) + "." + b64url([]byte(claims))
+	digest := sha256.Sum256([]byte(signing))
+	sig := btcecsa.Sign(priv, digest[:])
+	var raw [64]byte
+	r, s := sig.R(), sig.S()
+	rb, sb := r.Bytes(), s.Bytes()
+	copy(raw[:32], rb[:])
+	copy(raw[32:], sb[:])
+	return signing + "." + b64url(raw[:]), nil
+}
+
+func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
