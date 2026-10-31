@@ -265,3 +265,6 @@ func readArg(b []byte, arg byte) (any, []byte, error) {
 	}
 	return nil, nil, fmt.Errorf("dagcbor: bad arg %d", arg)
 }
+
+// ErrNotAMap reports a decoded value that is not a map.
+var ErrNotAMap = fmt.Errorf("dagcbor: value is not a map")
