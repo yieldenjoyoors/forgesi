@@ -37,6 +37,7 @@ type Knot struct {
 	mux      *http.ServeMux
 	store    *cob.Store
 	registry RepoStore
+	be       cob.Backend // shared with the git transport
 }
 
 // New builds the knot handler. A nil Auth fails closed: every write is
@@ -48,19 +49,23 @@ func New(opt Options) *Knot {
 	}
 	var st *cob.Store
 	var reg RepoStore
+	var be cob.Backend
 	if opt.DB != nil {
 		if err := cob.Migrate(opt.DB); err != nil {
 			panic("knot: migrate: " + err.Error())
 		}
-		st, _ = cob.New(cob.NewD1Backend(opt.DB), "did:web:"+opt.Host)
+		be = cob.NewD1Backend(opt.DB)
+		st, _ = cob.New(be, "did:web:"+opt.Host)
 		reg = NewD1RepoStore(opt.DB)
 	} else {
-		st, _ = cob.New(cob.NewMemoryBackend(), "did:web:"+opt.Host)
+		be = cob.NewMemoryBackend()
+		st, _ = cob.New(be, "did:web:"+opt.Host)
 		reg = newMemoryRepoStore()
 	}
-	k := &Knot{opt: opt, mux: http.NewServeMux(), store: st, registry: reg}
+	k := &Knot{opt: opt, mux: http.NewServeMux(), store: st, registry: reg, be: be}
 	k.routes()
 	k.records()
+	k.gitRoutes()
 	return k
 }
 
