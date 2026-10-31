@@ -1,6 +1,7 @@
 {
-  // ForgeSI knot: a Tangled knot on Cloudflare. Go wasm worker; git objects
-  // land in Artifacts (M2), the firehose in a Durable Object (M3).
+  // ForgeSI knot: a Tangled knot on Cloudflare. Go wasm worker over D1;
+  // static web (landing + console shell) served from ./web. Git objects in
+  // Artifacts (M2b) and the firehose in a Durable Object (M3) come next.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "forgesi-knot",
   "main": "dist-gen/worker.mjs",
@@ -15,6 +16,24 @@
   "rules": [
     { "type": "ESModule", "globs": ["**/*.wasm"], "fallthrough": true }
   ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "forgesi-knot-dev",
+      // Placeholder id: --local dev works without a remote database; the
+      // real id is pasted at first `wrangler d1 create forgesi-knot`.
+      "database_id": "REPLACE_WITH_D1_ID",
+      "migrations_dir": "internal/cob/migrations"
+    }
+  ],
+
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/xrpc/*", "/.well-known/*", "/git/*"]
+  },
 
   "vars": {
     "KNOT_HOST": "knot.forgesi.org",

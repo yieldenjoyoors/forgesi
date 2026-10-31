@@ -1,12 +1,16 @@
 package knot
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yieldenjoyoors/forgesi/internal/cob"
 )
@@ -32,41 +36,101 @@ func (d DevAuthorizer) Authorize(r *http.Request) string {
 	return d.DID
 }
 
+// RepoStore is the repo registry (D1-backed in production).
+type RepoStore interface {
+	create(did, name, branch string) (ok bool)
+	byDID(did string) (*repoAccount, bool)
+	list() []repoAccount
+}
+
 // repoAccount is one repo hosted by the knot.
 type repoAccount struct {
 	Did, Name, DefaultBranch string
 }
 
-// repoRegistry tracks hosted repos (D1-backed in production; the seam is
-// the interface, not the storage).
-type repoRegistry struct {
+// memoryRepoStore is the in-memory registry (unit tests).
+type memoryRepoStore struct {
 	mu    sync.Mutex
 	repos map[string]*repoAccount
 }
 
-func newRepoRegistry() *repoRegistry {
-	return &repoRegistry{repos: map[string]*repoAccount{}}
+func newMemoryRepoStore() *memoryRepoStore {
+	return &memoryRepoStore{repos: map[string]*repoAccount{}}
 }
 
-func (rr *repoRegistry) create(did, name, branch string) bool {
-	rr.mu.Lock()
-	defer rr.mu.Unlock()
-	if _, ok := rr.repos[name]; ok {
+func (m *memoryRepoStore) create(did, name, branch string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.repos[name]; ok {
 		return false
 	}
-	rr.repos[name] = &repoAccount{Did: did, Name: name, DefaultBranch: branch}
+	m.repos[name] = &repoAccount{Did: did, Name: name, DefaultBranch: branch}
 	return true
 }
 
-func (rr *repoRegistry) byDID(did string) (*repoAccount, bool) {
-	rr.mu.Lock()
-	defer rr.mu.Unlock()
-	for _, r := range rr.repos {
+func (m *memoryRepoStore) byDID(did string) (*repoAccount, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.repos {
 		if r.Did == did {
 			return r, true
 		}
 	}
 	return nil, false
+}
+
+func (m *memoryRepoStore) list() []repoAccount {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]repoAccount, 0, len(m.repos))
+	for _, r := range m.repos {
+		out = append(out, *r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// d1RepoStore persists the registry; isolates share nothing, D1 does.
+type d1RepoStore struct{ db *sql.DB }
+
+// NewD1RepoStore builds the SQL-backed registry.
+func NewD1RepoStore(db *sql.DB) RepoStore { return &d1RepoStore{db: db} }
+
+func (d *d1RepoStore) create(did, name, branch string) bool {
+	res, err := d.db.Exec(
+		`INSERT OR IGNORE INTO knot_repos (did, name, default_branch, created_at) VALUES (?, ?, ?, ?)`,
+		did, name, branch, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
+func (d *d1RepoStore) byDID(did string) (*repoAccount, bool) {
+	row := d.db.QueryRow(`SELECT did, name, default_branch FROM knot_repos WHERE did = ?`, did)
+	var r repoAccount
+	if err := row.Scan(&r.Did, &r.Name, &r.DefaultBranch); err != nil {
+		return nil, false
+	}
+	return &r, true
+}
+
+func (d *d1RepoStore) list() []repoAccount {
+	rows, err := d.db.Query(`SELECT did, name, default_branch FROM knot_repos ORDER BY name`)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	var out []repoAccount
+	for rows.Next() {
+		var r repoAccount
+		if err := rows.Scan(&r.Did, &r.Name, &r.DefaultBranch); err != nil {
+			return nil
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -80,6 +144,70 @@ func (k *Knot) records() {
 	k.mux.HandleFunc("POST /xrpc/com.atproto.repo.deleteRecord", k.handleDeleteRecord)
 	k.mux.HandleFunc("GET /xrpc/com.atproto.repo.getRecord", k.handleGetRecord)
 	k.mux.HandleFunc("GET /xrpc/org.tangled.repo.listRecordVersions", k.handleListRecordVersions)
+	k.mux.HandleFunc("GET /xrpc/org.tangled.repo.listRepos", k.handleListRepos)
+	k.mux.HandleFunc("GET /xrpc/com.atproto.repo.listRecords", k.handleListRecords)
+}
+
+// handleListRepos serves the knot's repo listing (our client's index).
+func (k *Knot) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	type repoView struct {
+		Did           string `json:"did"`
+		Name          string `json:"name"`
+		DefaultBranch string `json:"defaultBranch"`
+	}
+	_ = repoView{}
+	repos := k.registry.list()
+	out := make([]repoView, 0, len(repos))
+	for _, rp := range repos {
+		v := repoView(rp)
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": out})
+}
+
+// handleListRecords follows the atproto listRecords shape.
+func (k *Knot) handleListRecords(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	collection := q.Get("collection")
+	if _, ok := k.registry.byDID(repo); !ok {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", "no such repo")
+		return
+	}
+	limit := 50
+	if l := q.Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	cursor := q.Get("cursor")
+	prefix := "refs/cobs/" + repo + "/" + collection + "/"
+	if cursor != "" {
+		cursor = prefix + cursor
+	}
+	recs, rkeys, err := k.store.ListRecords(repo, collection, limit, cursor)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
+		return
+	}
+	type recordView struct {
+		URI   string         `json:"uri"`
+		CID   string         `json:"cid"`
+		Value map[string]any `json:"value"`
+	}
+	out := make([]recordView, 0, len(recs))
+	for i, rec := range recs {
+		out = append(out, recordView{
+			URI:   "at://" + repo + "/" + collection + "/" + rkeys[i],
+			CID:   rec.CID,
+			Value: rec.Value,
+		})
+	}
+	resp := map[string]any{"records": out}
+	if len(rkeys) == limit {
+		resp["cursor"] = rkeys[len(rkeys)-1]
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // atproto error envelope: {"error": "<code>", "message": "<detail>"}.

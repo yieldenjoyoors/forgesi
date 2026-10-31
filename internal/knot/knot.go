@@ -5,6 +5,7 @@
 package knot
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -23,6 +24,10 @@ type Options struct {
 	// Auth verifies write callers. DevAuthorizer for local development;
 	// the ES256K service-auth verifier in production.
 	Auth Authorizer
+	// DB persists objects, refs and the repo registry (the D1 binding in
+	// production; nil falls back to in-memory — unit tests only, since
+	// isolates share nothing).
+	DB *sql.DB
 }
 
 // Knot serves the wire surface. Storage bindings attach in M2/M3; M1 is the
@@ -31,20 +36,29 @@ type Knot struct {
 	opt      Options
 	mux      *http.ServeMux
 	store    *cob.Store
-	registry *repoRegistry
+	registry RepoStore
 }
 
 // New builds the knot handler. A nil Auth fails closed: every write is
-// 401 until a real authorizer is wired.
+// 401 until a real authorizer is wired. A nil DB falls back to in-memory
+// storage (unit tests); production wires D1.
 func New(opt Options) *Knot {
 	if opt.Auth == nil {
 		opt.Auth = RejectAuthorizer{}
 	}
-	st, err := cob.New(cob.NewMemoryBackend(), "did:web:"+opt.Host)
-	if err != nil {
-		panic(err) // construction cannot fail today; see cob.New
+	var st *cob.Store
+	var reg RepoStore
+	if opt.DB != nil {
+		if err := cob.Migrate(opt.DB); err != nil {
+			panic("knot: migrate: " + err.Error())
+		}
+		st, _ = cob.New(cob.NewD1Backend(opt.DB), "did:web:"+opt.Host)
+		reg = NewD1RepoStore(opt.DB)
+	} else {
+		st, _ = cob.New(cob.NewMemoryBackend(), "did:web:"+opt.Host)
+		reg = newMemoryRepoStore()
 	}
-	k := &Knot{opt: opt, mux: http.NewServeMux(), store: st, registry: newRepoRegistry()}
+	k := &Knot{opt: opt, mux: http.NewServeMux(), store: st, registry: reg}
 	k.routes()
 	k.records()
 	return k

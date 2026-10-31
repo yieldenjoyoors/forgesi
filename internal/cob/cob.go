@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yieldenjoyoors/forgesi/internal/dagcbor"
@@ -35,6 +37,9 @@ type Backend interface {
 	GetObject(oid string) ([]byte, error)
 	RefHead(ref string) (oid string, ok bool, err error)
 	SetRef(ref string, oid string) error
+	// ListRefs enumerates refs under a prefix, ordered lexically, after the
+	// cursor, up to limit.
+	ListRefs(prefix, after string, limit int) ([]string, error)
 }
 
 // MemoryBackend is an in-memory Backend.
@@ -70,6 +75,21 @@ func (m *MemoryBackend) RefHead(ref string) (string, bool, error) {
 func (m *MemoryBackend) SetRef(ref string, oid string) error {
 	m.refs[ref] = oid
 	return nil
+}
+
+// ListRefs implements Backend.ListRefs from the in-memory map.
+func (m *MemoryBackend) ListRefs(prefix, after string, limit int) ([]string, error) {
+	var keys []string
+	for k := range m.refs {
+		if strings.HasPrefix(k, prefix) && k > after {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys, nil
 }
 
 // objectID computes a git object id: sha1 over "<kind> <len>\0<content>".
@@ -454,4 +474,37 @@ func decodeRecord(blob []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("record blob is not a map")
 	}
 	return m, nil
+}
+
+// ListRefs returns refs under a prefix (e.g. "refs/cobs/<repo>/<collection>/"),
+// ordered lexically, starting strictly after `after` (pagination cursor).
+// The record-listing surface (com.atproto.repo.listRecords) walks it.
+func (s *Store) ListRefs(prefix, after string, limit int) ([]string, error) {
+	return s.be.ListRefs(prefix, after, limit)
+}
+
+// ListRecords materializes every live record in a collection. Live only —
+// tombstoned chains are skipped (atproto never lists deleted records).
+func (s *Store) ListRecords(repo, collection string, limit int, cursor string) ([]Record, []string, error) {
+	prefix := cobRef(repo, collection, "")
+	refs, err := s.be.ListRefs(prefix, cursor, limit+1)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []Record
+	var rkeys []string
+	for _, ref := range refs {
+		rkey := ref[len(prefix):]
+		head, ok, err := s.be.RefHead(ref)
+		if err != nil || !ok {
+			continue
+		}
+		v, err := s.readVersion(head)
+		if err != nil || v.Deleted {
+			continue
+		}
+		out = append(out, Record{CID: v.CID, Change: head, Editor: v.Editor, Value: v.Value})
+		rkeys = append(rkeys, rkey)
+	}
+	return out, rkeys, nil
 }
