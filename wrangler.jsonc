@@ -20,12 +20,16 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "forgesi-knot-dev",
-      // Placeholder id: --local dev works without a remote database; the
-      // real id is pasted at first `wrangler d1 create forgesi-knot`.
-      "database_id": "REPLACE_WITH_D1_ID",
+      "database_name": "forgesi-knot",
+      "database_id": "bab284bd-25b3-4af1-a522-ffa158fd7f82",
       "migrations_dir": "internal/cob/migrations"
     }
+  ],
+
+  // forgesi.org is the knot origin: landing at /, console at /app,
+  // XRPC under /xrpc, identity at /.well-known — one worker, one domain.
+  "routes": [
+    { "pattern": "forgesi.org", "custom_domain": true }
   ],
 
   "assets": {
@@ -36,7 +40,7 @@
   },
 
   "vars": {
-    "KNOT_HOST": "knot.forgesi.org",
+    "KNOT_HOST": "forgesi.org",
     "KNOT_VERSION": "0.1.0"
   }
 }

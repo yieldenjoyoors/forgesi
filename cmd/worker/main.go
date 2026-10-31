@@ -7,10 +7,10 @@ package main
 
 import (
 	"database/sql"
-	"os"
 	"strings"
 
 	workers "github.com/syumai/workers-go"
+	"github.com/syumai/workers-go/cloudflare"
 	"github.com/syumai/workers-go/cloudflare/d1"
 
 	"github.com/yieldenjoyoors/forgesi/internal/knot"
@@ -24,7 +24,7 @@ func main() {
 	auth := knot.Authorizer(knot.RejectAuthorizer{})
 	// KNOT_AUTH=dev: accept any bearer, attribute to KNOT_DEV_DID. Local
 	// development only — the ES256K service-auth verifier replaces this.
-	if envOr("KNOT_AUTH", "dev") == "dev" {
+	if envOr("KNOT_AUTH", "reject") == "dev" {
 		auth = knot.DevAuthorizer{DID: envOr("KNOT_DEV_DID", "did:web:knot.forgesi.org:dev")}
 	}
 	workers.Serve(knot.New(knot.Options{
@@ -44,8 +44,10 @@ func openDB() (*sql.DB, error) {
 	return sql.OpenDB(connector), nil
 }
 
+// envOr reads worker vars. os.Getenv cannot see them in wasm — vars arrive
+// through the Workers runtime.
 func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := cloudflare.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
