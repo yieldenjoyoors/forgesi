@@ -41,6 +41,7 @@
 
   "vars": {
     "KNOT_HOST": "forgesi.org",
-    "KNOT_VERSION": "0.1.0"
+    "KNOT_VERSION": "0.1.0",
+    "KNOT_AUTH": "service"
   }
 }

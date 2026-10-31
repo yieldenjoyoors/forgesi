@@ -15,20 +15,21 @@ import (
 	"github.com/yieldenjoyoors/forgesi/internal/cob"
 )
 
-// Authorizer decides who is calling a write endpoint. The real verifier
-// (atproto service-auth JWTs: iss=PDS, secp256k1 signature, aud/lxm/exp)
-// lands as another Authorizer; handlers never change.
+// Authorizer decides who is calling a write endpoint. aud is the audience
+// the ROUTE expects (the knot DID for repo management, the repo DID for
+// record writes) — service-auth tokens are minted per audience.
 type Authorizer interface {
 	// Authorize returns the caller's DID, or "" when unauthenticated.
-	Authorize(r *http.Request) string
+	Authorize(r *http.Request, aud string) string
 }
 
 // DevAuthorizer accepts any Bearer token and attributes the write to a
 // fixed DID. Local development and tests only — never wire in production.
 type DevAuthorizer struct{ DID string }
 
-// Authorize implements Authorizer.
-func (d DevAuthorizer) Authorize(r *http.Request) string {
+// Authorize implements Authorizer (aud is ignored).
+func (d DevAuthorizer) Authorize(r *http.Request, aud string) string {
+	_ = aud
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, "Bearer ") {
 		return ""
@@ -233,7 +234,7 @@ type repoBody struct {
 }
 
 func (k *Knot) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
-	editor := k.opt.Auth.Authorize(r)
+	editor := k.opt.Auth.Authorize(r, k.did()) // repo management: aud = knot DID
 	if editor == "" {
 		writeErr(w, http.StatusUnauthorized, "Unauthorized", "missing service auth")
 		return
@@ -262,15 +263,16 @@ func (k *Knot) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *Knot) authorized(w http.ResponseWriter, r *http.Request) (string, repoBody, bool) {
-	editor := k.opt.Auth.Authorize(r)
-	if editor == "" {
-		writeErr(w, http.StatusUnauthorized, "Unauthorized", "missing service auth")
-		return "", repoBody{}, false
-	}
 	var body repoBody
+	// COB writes: aud = the repo DID (the web client's service-auth rule).
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "InvalidRequest", err.Error())
 		return "", body, false
+	}
+	editor := k.opt.Auth.Authorize(r, body.Repo)
+	if editor == "" {
+		writeErr(w, http.StatusUnauthorized, "Unauthorized", "missing service auth")
+		return "", repoBody{}, false
 	}
 	if _, ok := k.registry.byDID(body.Repo); !ok {
 		writeErr(w, http.StatusBadRequest, "InvalidRequest", "no such repo")

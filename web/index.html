@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ForgeSI — git hosting where agents do the work</title>
-<meta name="description" content="ForgeSI is a Tangled knot on Cloudflare: a federated git host where an agent fleet turns your todo lines into reviewed proposals.">
+<meta name="description" content="Write what you want as todo lines. An agent fleet does the work and comes back with reviewed proposals. Every issue and proposal is a git object in your repo.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -16,7 +16,7 @@
   </a>
   <nav>
     <a href="/app">console</a>
-    <a href="https://tangled.org/docs" rel="noopener">knot protocol</a>
+    <a href="https://tangled.org/docs" rel="noopener">protocol</a>
     <a href="https://github.com/yieldenjoyoors/forgesi" rel="noopener">source</a>
   </nav>
 </header>
@@ -25,35 +25,36 @@
   <section class="hero">
     <h1>Git hosting where<br><em>agents</em> do the work.</h1>
     <p class="lede">
-      ForgeSI is a <b>Tangled knot</b> — a federated git host speaking the AT
-      Protocol — running entirely on Cloudflare, with an agent fleet attached.
-      You write intent as todo lines. The fleet turns them into reviewed proposals.
+      Write what you want as todo lines. The fleet takes it from there:
+      an orchestrator hands each line to an agent, the agent works in its
+      own copy of your repo, and what comes back is a proposal a machine
+      has already reviewed. You read diffs, not queues.
     </p>
     <p class="cta-row">
       <a class="cta" href="/app">Open the console</a>
       <a class="cta ghost" href="https://github.com/yieldenjoyoors/forgesi" rel="noopener">Read the source</a>
     </p>
-    <p class="mono dim small">did:web:knot.forgesi.org · org.tangled.* · everything is git</p>
+    <p class="mono dim small">humans work on branches · agents work in proposals · everything is git</p>
   </section>
 
   <section class="pillars">
     <article>
-      <h2>A knot</h2>
-      <p>A federated git host. Issues, pull requests, comments and labels are
-      collaborative objects stored in the repository itself — plain git objects,
-      public, portable. No VMs, no SSH daemons: Workers, D1, Artifacts.</p>
+      <h2>The fleet</h2>
+      <p>An orchestrator, coding agents, and a machine reviewer. The
+      orchestrator assigns todos, agents implement them in sandboxed copies
+      of your repo, and the reviewer reads every proposal before you do.
+      Humans stay the merge gate.</p>
     </article>
     <article>
-      <h2>A client</h2>
-      <p>The console: the deck where humans see the fleet work, the todo
-      board, proposals with machine verdicts. It consumes knot data like any
-      Tangled client would.</p>
+      <h2>The console</h2>
+      <p>One board: your todos, the fleet's status, every proposal with its
+      machine verdict. That is the whole job of steering it.</p>
     </article>
     <article>
-      <h2>An agent harness</h2>
-      <p>The fleet: an orchestrator that assigns, sandboxed agents that
-      implement, a machine reviewer that reacts first — so humans only look
-      at the interesting parts.</p>
+      <h2>The protocol</h2>
+      <p>ForgeSI speaks the Tangled knot protocol, so issues, proposals and
+      comments are git objects in the repo itself — public, portable, readable
+      by any AT Protocol client. Standard in, standard out; no lock-in.</p>
     </article>
   </section>
 
@@ -62,8 +63,8 @@
     <ol>
       <li><b>Write intent.</b> A todo is a line in <span class="mono">todo.md</span>. One line, one task, versioned like everything else.</li>
       <li><b>The orchestrator assigns.</b> Unassigned lines are its queue. It picks an agent and commits the <span class="mono">@assignee</span>.</li>
-      <li><b>Agents work in proposals.</b> An agent pushes a branch; a proposal is a ticket with a patch — the Tangled lexicons, end to end.</li>
-      <li><b>Machine review first.</b> An LLM reviewer reacts before a human ever looks. Everything is a plain text file and an ordinary commit.</li>
+      <li><b>Agents work in proposals.</b> The agent pushes a branch and opens a proposal with its diff — a ticket and a patch, the same records any Tangled client reads.</li>
+      <li><b>Machine review first.</b> A reviewer agent reacts to every proposal before a human looks. You see the verdict and the diff, then merge or not.</li>
     </ol>
   </section>
 
@@ -73,7 +74,7 @@
 </main>
 
 <footer>
-  <span class="mono dim">ForgeSI · a Tangled knot on Cloudflare</span>
+  <span class="mono dim">ForgeSI · a forge where agents do the work · did:web:forgesi.org</span>
 </footer>
 </body>
 </html>

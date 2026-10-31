@@ -78,7 +78,7 @@ func (k *Knot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type RejectAuthorizer struct{}
 
 // Authorize implements Authorizer (always unauthenticated).
-func (RejectAuthorizer) Authorize(*http.Request) string { return "" }
+func (RejectAuthorizer) Authorize(*http.Request, string) string { return "" }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
