@@ -112,3 +112,14 @@ func TestServiceAuthRecordWriteOverHTTP(t *testing.T) {
 		t.Errorf("unauthenticated write status = %d, want 401", w.Code)
 	}
 }
+
+// testVerifier resolves every DID to the knot's own key (repo docs carry
+// it in production).
+func testVerifier(key *btcec.PrivateKey) *atauth.Verifier {
+	return &atauth.Verifier{ResolveDID: func(did string) (*atauth.DIDDoc, error) {
+		return &atauth.DIDDoc{Keys: []atauth.DIDKey{{ID: did + "#k", Type: "EcdsaSecp256k1VerificationKey2019",
+			Multibase: "z" + atauth.Base58Encode(key.PubKey().SerializeCompressed())}}}, nil
+	}, Now: time.Now}
+}
+
+func nowPlus(seconds int64) time.Time { return time.Now().Add(time.Duration(seconds) * time.Second) }

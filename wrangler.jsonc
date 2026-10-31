@@ -39,6 +39,11 @@
     "run_worker_first": ["/xrpc/*", "/.well-known/*", "/git/*", "/did:*", "/repo:*"]
   },
 
+  // The orchestrator heartbeat.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
   "vars": {
     "KNOT_HOST": "forgesi.org",
     "KNOT_VERSION": "0.1.0",

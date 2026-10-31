@@ -34,6 +34,13 @@ type Options struct {
 	// set, repo DID documents carry its public half so standard service-auth
 	// verification accepts minted tokens.
 	MintKey *btcec.PrivateKey
+	// Starter launches agent runs (the runner fetch in production). nil =
+	// pull mode: runners ask fleet.nextRun.
+	Starter func(run RunRequest) error
+	// CronInternal marks the in-process cron caller (skips HTTP auth).
+	CronInternal bool
+	// RunnerKey authenticates fleet runners on nextRun/runDone (pull mode).
+	RunnerKey string
 }
 
 // Knot serves the wire surface. Storage bindings attach in M2/M3; M1 is the
@@ -76,6 +83,7 @@ func New(opt Options) *Knot {
 	k.didDocRoutes()
 	k.wsRoutes()
 	k.mintRoutes()
+	k.fleetRoutes()
 	return k
 }
 

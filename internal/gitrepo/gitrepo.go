@@ -241,3 +241,167 @@ func (r Repo) Branches() (map[string]string, error) {
 	}
 	return out, nil
 }
+
+// ReadFileAt resolves a path in the commit at head ("" = default HEAD,
+// resolved as main/master/first branch).
+func (r Repo) ReadFileAt(head, path string) ([]byte, error) {
+	if head == "" {
+		h, err := r.Head()
+		if err != nil {
+			return nil, err
+		}
+		head = h
+	}
+	commit, err := r.ReadObject(head)
+	if err != nil {
+		return nil, err
+	}
+	if commit.Type != "commit" {
+		return nil, fmt.Errorf("gitrepo: %s is not a commit", head)
+	}
+	treeOID := commitField(commit.Data, "tree")
+	return r.readFileInTree(treeOID, strings.Split(path, "/"))
+}
+
+func (r Repo) readFileInTree(treeOID string, path []string) ([]byte, error) {
+	tree, err := r.ReadObject(treeOID)
+	if err != nil {
+		return nil, err
+	}
+	if tree.Type != "tree" {
+		return nil, fmt.Errorf("gitrepo: %s is not a tree", treeOID)
+	}
+	for _, e := range ParseTree(tree.Data) {
+		if e.Name != path[0] {
+			continue
+		}
+		if len(path) == 1 {
+			if e.Mode != "100644" && e.Mode != "100755" {
+				return nil, fmt.Errorf("gitrepo: %s is not a file", path[0])
+			}
+			blob, err := r.ReadObject(e.OID)
+			if err != nil {
+				return nil, err
+			}
+			return blob.Data, nil
+		}
+		if e.Mode != "40000" {
+			return nil, fmt.Errorf("gitrepo: %s is not a directory", e.Name)
+		}
+		return r.readFileInTree(e.OID, path[1:])
+	}
+	return nil, fmt.Errorf("gitrepo: %s not found", path[0])
+}
+
+// Head returns the default branch's commit oid.
+func (r Repo) Head() (string, error) {
+	branches, err := r.Branches()
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{"main", "master"} {
+		if oid, ok := branches[name]; ok {
+			return oid, nil
+		}
+	}
+	for _, oid := range branches {
+		return oid, nil
+	}
+	return "", fmt.Errorf("gitrepo: empty repository")
+}
+
+func commitField(data []byte, field string) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, field+" ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, field+" "))
+		}
+		if line == "" {
+			break
+		}
+	}
+	return ""
+}
+
+// CommitFile writes one file's new content (or deletes it when nil) and
+// advances branch, returning the new commit oid. Parents chain correctly.
+func (r Repo) CommitFile(branch, path string, content []byte, msg, ident string) (string, error) {
+	parents, err := r.Branches()
+	if err != nil {
+		return "", err
+	}
+	parent := parents[branch]
+	var treeRoot string
+	if parent != "" {
+		pc, err := r.ReadObject(parent)
+		if err != nil {
+			return "", err
+		}
+		treeRoot = commitField(pc.Data, "tree")
+	}
+	newTree, err := r.upsertPath(treeRoot, strings.Split(path, "/"), content)
+	if err != nil {
+		return "", err
+	}
+	var parentLines string
+	if parent != "" {
+		parentLines = "parent " + parent + "\n"
+	}
+	ts := strconv.FormatInt(timeNow().Unix(), 10)
+	commit := "tree " + newTree + "\n" + parentLines +
+		"author " + ident + " " + ts + " +0000\n" +
+		"committer " + ident + " " + ts + " +0000\n\n" + msg + "\n"
+	oid, err := r.StoreObject("commit", []byte(commit))
+	if err != nil {
+		return "", err
+	}
+	if err := r.Be.SetRef("refs/heads/"+branch, oid); err != nil {
+		return "", err
+	}
+	return oid, nil
+}
+
+// upsertPath returns a new tree oid with content placed at path; nil
+// content deletes the entry.
+func (r Repo) upsertPath(treeOID string, path []string, content []byte) (string, error) {
+	entries := []TreeEntry{}
+	if treeOID != "" {
+		t, err := r.ReadObject(treeOID)
+		if err != nil {
+			return "", err
+		}
+		entries = ParseTree(t.Data)
+	}
+	name := path[0]
+	var kept []TreeEntry
+	for _, e := range entries {
+		if e.Name != name {
+			kept = append(kept, e)
+		}
+	}
+	if len(path) == 1 {
+		if content != nil {
+			blobOID, err := r.StoreObject("blob", content)
+			if err != nil {
+				return "", err
+			}
+			kept = append(kept, TreeEntry{Mode: "100644", Name: name, OID: blobOID})
+		}
+	} else {
+		var sub string
+		for _, e := range entries {
+			if e.Name == name && e.Mode == "40000" {
+				sub = e.OID
+			}
+		}
+		newSub, err := r.upsertPath(sub, path[1:], content)
+		if err != nil {
+			return "", err
+		}
+		kept = append(kept, TreeEntry{Mode: "40000", Name: name, OID: newSub})
+	}
+	treeContent := EncodeTree(kept)
+	return r.StoreObject("tree", treeContent)
+}
+
+// timeNow is a seam for deterministic tests.
+var timeNow = func() time.Time { return time.Now().UTC() }

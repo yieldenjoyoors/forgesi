@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	workers "github.com/syumai/workers-go"
 	"github.com/syumai/workers-go/cloudflare"
+	"github.com/syumai/workers-go/cloudflare/cron"
 	"github.com/syumai/workers-go/cloudflare/d1"
 	"github.com/syumai/workers-go/cloudflare/fetch"
 
@@ -41,13 +43,22 @@ func main() {
 		auth = knot.ServiceAuth{V: &atauth.Verifier{ResolveDID: resolveDID, Now: time.Now}}
 	}
 	mintKey := loadMintKey()
-	workers.Serve(knot.New(knot.Options{
-		Host:    strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
-		Version: envOr("KNOT_VERSION", "0.1.0"),
-		Auth:    auth,
-		DB:      db,
-		MintKey: mintKey,
-	}))
+	knotHandler := knot.New(knot.Options{
+		Host:      strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
+		Version:   envOr("KNOT_VERSION", "0.1.0"),
+		Auth:      auth,
+		DB:        db,
+		MintKey:   mintKey,
+		RunnerKey: cloudflare.Getenv("KNOT_RUNNER_KEY"),
+	})
+	workers.Serve(knotHandler)
+	// The orchestrator heartbeat: cron-triggered (wrangler.jsonc triggers)
+	// and also reachable manually via the authed fleet.tick endpoint.
+	cron.ScheduleTaskNonBlock(func(ctx context.Context) error {
+		knotHandler.TickInternal()
+		return nil
+	})
+	<-cron.Done()
 }
 
 // resolveDID fetches DID documents: did:web from the origin's
