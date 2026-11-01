@@ -20,15 +20,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install workers-assets-gen
-        run: go install github.com/syumai/workers/assets-generator/cmd/workers-assets-gen@a38be30753a4
-
       - name: Build the runner Worker (wasm)
         working-directory: runner
-        run: |
-          export PATH="$PATH:$(go env GOPATH)/bin"
-          workers-assets-gen -mode=go -o dist-gen
-          GOOS=js GOARCH=wasm go build -trimpath -o dist-gen/app.wasm ./cmd/worker
+        run: GOOS=js GOARCH=wasm go build -trimpath -o dist-gen/app.wasm ./cmd/worker
 
       - name: Deploy the runner Worker
         working-directory: runner
