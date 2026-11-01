@@ -111,3 +111,34 @@ func Assign(content string, line int, assignee, status string) string {
 	lines[line-1] = "- " + box + " " + strings.TrimSpace(newTitle)
 	return strings.Join(lines, "\n")
 }
+
+// Complete marks the item whose title matches done: checkbox flips to [x]
+// and the assignment/status tags come off. A proposal merge calls this to
+// close the loop — the todo line that started the run is finished. No
+// match (the line was edited or is gone) leaves the file untouched.
+func Complete(content, title string) string {
+	for i, raw := range strings.Split(content, "\n") {
+		m := itemRe.FindStringSubmatch(raw)
+		if m == nil {
+			continue
+		}
+		it := Item{Title: m[2]}
+		fields := strings.Fields(it.Title)
+		var keep []string
+		for _, f := range fields {
+			switch {
+			case strings.HasPrefix(f, "@"):
+			case strings.HasPrefix(f, "#") && statuses[strings.TrimPrefix(f, "#")]:
+			default:
+				keep = append(keep, f)
+			}
+		}
+		if strings.Join(keep, " ") != title {
+			continue
+		}
+		lines := strings.Split(content, "\n")
+		lines[i] = "- [x] " + strings.Join(keep, " ")
+		return strings.Join(lines, "\n")
+	}
+	return content
+}

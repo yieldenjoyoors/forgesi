@@ -7,10 +7,13 @@ export class FleetAgent extends Container {
 }
 
 export default {
-	async fetch(req: Request, env: { FLEET_AGENTDO: { getByName: (n: string) => { fetch: (r: Request) => Promise<Response> } } }): Promise<Response> {
+	async fetch(req: Request, env: { FLEET_AGENT_DO: { getByName: (n: string) => { fetch: (r: Request) => Promise<Response> } }; KNOT_RUNNER_KEY?: string }): Promise<Response> {
 		const url = new URL(req.url);
 		if (req.method === "POST" && url.pathname === "/run") {
-			const container = env.FLEET_AGENTDO.getByName("fleet");
+			if (env.KNOT_RUNNER_KEY && req.headers.get("Authorization") !== "Bearer " + env.KNOT_RUNNER_KEY) {
+				return new Response("runner key required\n", { status: 401 });
+			}
+			const container = env.FLEET_AGENT_DO.getByName("fleet");
 			return container.fetch(req);
 		}
 		if (url.pathname === "/health") {

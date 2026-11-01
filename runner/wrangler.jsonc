@@ -29,6 +29,7 @@
   },
 
   "vars": {
-    "KNOT": "https://forgesi.org"
+    "KNOT": "https://forgesi.org",
+    "RUN_MODE": "serve"
   }
 }

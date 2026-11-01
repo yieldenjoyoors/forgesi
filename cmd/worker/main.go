@@ -67,6 +67,7 @@ func main() {
 		DB:        db,
 		MintKey:   mintKey,
 		RunnerKey: cloudflare.Getenv("KNOT_RUNNER_KEY"),
+		RunnerURL: cloudflare.Getenv("RUNNER_URL"),
 		ReviewLLM: reviewLLM,
 	})
 	workers.Serve(knotHandler)

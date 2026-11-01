@@ -32,5 +32,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           KNOT: https://forgesi.org
           LLM_KEY: ${{ secrets.GLM_API_KEY }}
+          KNOT_RUNNER_KEY: ${{ secrets.KNOT_RUNNER_KEY }}
         run: |
           npx -y wrangler@4.156.0 deploy

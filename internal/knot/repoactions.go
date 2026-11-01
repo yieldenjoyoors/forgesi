@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/yieldenjoyoors/forgesi/internal/todo"
 )
 
 // Repo action surface: file read/write with optimistic concurrency, and
@@ -22,9 +24,10 @@ type fileBody struct {
 }
 
 type mergeBody struct {
-	Repo string `json:"repo"`
-	Base string `json:"base"`
-	Head string `json:"head"`
+	Repo   string `json:"repo"`
+	Base   string `json:"base"`
+	Head   string `json:"head"`
+	Ticket string `json:"ticket"` // rkey: flip the todo.md line on merge
 }
 
 // POST org.tangled.repo.getFile {repo, ref?, path} -> {content, head, ref}
@@ -157,5 +160,40 @@ func (k *Knot) handleMerge(w http.ResponseWriter, r *http.Request) {
 	}
 	k.emit(body.Repo, "commit", "", "refs/heads/"+body.Base, commit, commit,
 		map[string]any{"merge": body.Head, "editor": editor})
+	k.completeTodoOnMerge(body.Repo, body.Ticket, editor)
 	writeJSON(w, http.StatusOK, map[string]any{"commit": commit, "fastForward": ff})
+}
+
+// completeTodoOnMerge closes the fleet loop: the proposal's ticket carries
+// the todo line's title, so a merge flips that line to [x] and commits.
+// Best effort by design — a manually opened ticket with no matching line
+// (or a head race) simply leaves todo.md alone.
+func (k *Knot) completeTodoOnMerge(repo, ticketRkey, editor string) {
+	if ticketRkey == "" {
+		return
+	}
+	rec, err := k.store.Get(repo, "org.tangled.track.ticket", ticketRkey)
+	if err != nil {
+		return
+	}
+	titleMap, _ := rec.Value["title"].(map[string]any)
+	raw, _ := titleMap["text"].(string)
+	title := strings.TrimPrefix(raw, "agent: ")
+	if title == "" {
+		return
+	}
+	gr := k.gitrepoRepo(repo)
+	content, err := gr.ReadFileAt("", "todo.md")
+	if err != nil {
+		return
+	}
+	updated := todo.Complete(string(content), title)
+	if updated == string(content) {
+		return
+	}
+	if _, err := gr.CommitFileOn("main", "", "todo.md", []byte(updated),
+		"merge: complete '"+title+"'", editor+" <"+editor+">"); err != nil {
+		return
+	}
+	k.emit(repo, "commit", "todo.md", title, "", "", map[string]any{"completed": title})
 }

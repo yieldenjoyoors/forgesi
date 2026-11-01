@@ -1,6 +1,7 @@
 package knot
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,7 @@ func (k *Knot) fleetRoutes() {
 	k.mux.HandleFunc("POST /xrpc/org.tangled.review.submitPatch", k.handleSubmitPatch)
 	k.mux.HandleFunc("GET /xrpc/org.tangled.fleet.nextRun", k.handleNextRun)
 	k.mux.HandleFunc("GET /xrpc/org.tangled.fleet.runs", k.handleRuns)
+	k.mux.HandleFunc("POST /xrpc/org.tangled.fleet.retry", k.handleRetry)
 }
 
 // tick is the orchestrator: assign + start one run per repo with an open
@@ -89,6 +91,35 @@ type RunRequest struct {
 	Branch    string `json:"branch"`
 	TodoTitle string `json:"todoTitle"`
 	Token     string `json:"token"`
+}
+
+// wakeRunner starts a run in push mode: Starter first (the prod wiring),
+// then a direct POST to the runner worker URL. Pull-mode setups (no
+// RUNNER_URL, no Starter) simply skip — the runner polls nextRun.
+func (k *Knot) wakeRunner(req RunRequest) {
+	if k.opt.Starter != nil {
+		_ = k.opt.Starter(req)
+		return
+	}
+	if k.opt.RunnerURL == "" || k.opt.RunnerKey == "" {
+		return
+	}
+	go func() {
+		defer func() { _ = recover() }()
+		payload, _ := json.Marshal(req)
+		httpReq, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(k.opt.RunnerURL, "/")+"/run", bytes.NewReader(payload))
+		if err != nil {
+			return
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+k.opt.RunnerKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 15 * time.Second}
+		res, err := client.Do(httpReq)
+		if err != nil {
+			return
+		}
+		_ = res.Body.Close()
+	}()
 }
 
 func (k *Knot) hasRunningRun(repo string) bool {
@@ -315,4 +346,41 @@ func (k *Knot) handleRuns(w http.ResponseWriter, r *http.Request) {
 		out = append(out, jview(v))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
+}
+
+// handleRetry requeues a failed run: fresh run row, fresh token, same
+// todo item. The runner wakes and pulls it like any other run.
+func (k *Knot) handleRetry(w http.ResponseWriter, r *http.Request) {
+	if !k.runnerAuthorized(r) && k.opt.Auth.Authorize(r, k.did()) == "" {
+		writeErr(w, http.StatusUnauthorized, "Unauthorized", "runner key or service auth required")
+		return
+	}
+	var body struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunID == "" {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", "runId required")
+		return
+	}
+	var repo, branch, title string
+	err := k.opt.DB.QueryRow(`SELECT repo, branch, todo_title FROM knot_runs WHERE id = ?`, body.RunID).Scan(&repo, &branch, &title)
+	if err == sql.ErrNoRows {
+		writeErr(w, http.StatusNotFound, "NotFound", "no such run")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
+		return
+	}
+	runID := newRunID()
+	_, err = k.opt.DB.Exec(
+		`INSERT INTO knot_runs (id, repo, branch, todo_line, todo_title, status, created_at) VALUES (?, ?, ?, 0, ?, 'running', ?)`,
+		runID, repo, branch, title, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
+		return
+	}
+	k.wakeRunner(RunRequest{
+		RunID: runID, Repo: repo, Branch: branch, TodoTitle: title,
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID, "status": "running"})
 }
