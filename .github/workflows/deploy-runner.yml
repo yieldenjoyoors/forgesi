@@ -37,7 +37,7 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          npx -y wrangler@4.156.0 deploy --verbose 2>&1 | tee deploy.log || status=$?
+          npx -y wrangler@4.156.0 deploy 2>&1 | tee deploy.log || status=$?
           if [ "$status" -ne 0 ]; then
             {
               echo "### wrangler deploy output (tail)"
