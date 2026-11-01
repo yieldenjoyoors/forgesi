@@ -17,6 +17,10 @@
     }
   ],
 
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["FleetAgent"] }
+  ],
+
   "bindings": [
     {
       "name": "FLEET_AGENT",
