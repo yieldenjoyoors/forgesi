@@ -45,5 +45,7 @@ jobs:
               tail -80 deploy.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            TAILTXT=$(tail -30 deploy.log | tr -d '%' | tr -d '\r' | sed 's/.$//')
+            echo "::error::wrangler deploy failed: $TAILTXT"
             exit "$status"
           fi
