@@ -15,10 +15,6 @@
     }
   ],
 
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["FleetAgent"] }
-  ],
-
   "exports": {
     "FleetAgent": { "type": "durable-object", "storage": "sqlite" }
   },
