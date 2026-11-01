@@ -36,12 +36,23 @@ func main() {
 		panic("knot: no D1 binding: " + err.Error())
 	}
 	auth := knot.Authorizer(knot.RejectAuthorizer{})
+	var knotHandler *knot.Knot
 	switch cloudflare.Getenv("KNOT_AUTH") {
 	case "dev":
 		// Local development only.
 		auth = knot.DevAuthorizer{DID: envOr("KNOT_DEV_DID", "did:web:forgesi.org:dev")}
 	case "service":
-		auth = knot.ServiceAuth{V: &atauth.Verifier{ResolveDID: resolveDID, Now: time.Now}}
+		ver := &atauth.Verifier{ResolveDID: func(did string) (*atauth.DIDDoc, error) {
+			// Self-hosted identities resolve in-process: a worker fetching
+			// its own origin hits Cloudflare's recursion guard.
+			if knotHandler != nil {
+				if d := knotHandler.ResolveSelf(did); d != nil {
+					return d, nil
+				}
+			}
+			return resolveDID(did)
+		}, Now: time.Now}
+		auth = knot.ServiceAuth{V: ver}
 	}
 	mintKey := loadMintKey()
 	var reviewLLM func(system, user string) (string, error)
@@ -49,7 +60,7 @@ func main() {
 		client := &llm.Client{AccountID: acct, Token: tok}
 		reviewLLM = client.Complete
 	}
-	knotHandler := knot.New(knot.Options{
+	knotHandler = knot.New(knot.Options{
 		Host:      strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
 		Version:   envOr("KNOT_VERSION", "0.1.0"),
 		Auth:      auth,
@@ -71,12 +82,19 @@ func main() {
 // resolveDID fetches DID documents: did:web from the origin's
 // /.well-known/did.json, did:plc from the PLC directory.
 func resolveDID(did string) (*atauth.DIDDoc, error) {
-	var url string
+	var url, fallback string
 	switch {
 	case strings.HasPrefix(did, "did:web:"):
 		host := strings.ReplaceAll(strings.TrimPrefix(did, "did:web:"), "%3A", ":")
-		host = strings.ReplaceAll(host, ":", "/")
-		url = "https://" + host + "/.well-known/did.json"
+		parts := strings.Split(host, ":")
+		// spec form: last segment becomes /.well-known/did.json — except
+		// when it is a Tangled repo did, whose doc lives at /repo:<n>/did.json
+		if len(parts) > 1 {
+			url = "https://" + parts[0] + "/" + strings.Join(parts[1:], "/") + "/.well-known/did.json"
+			fallback = "https://" + parts[0] + "/" + strings.Join(parts[1:], "/") + "/did.json"
+		} else {
+			url = "https://" + host + "/.well-known/did.json"
+		}
 	case strings.HasPrefix(did, "did:plc:"):
 		url = "https://plc.directory/" + did
 	default:
@@ -89,6 +107,13 @@ func resolveDID(did string) (*atauth.DIDDoc, error) {
 	res, err := client.Get(url)
 	if err != nil {
 		return nil, err
+	}
+	if res.StatusCode == 404 && fallback != "" {
+		_ = res.Body.Close()
+		res, err = client.Get(fallback)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))

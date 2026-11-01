@@ -180,9 +180,11 @@ async function openRepo(r) {
 	$('repo-title').textContent = r.name;
 	$('repo-did').textContent = r.did;
 	$('ticket-form').style.display = 'flex';
+	$('tabs').style.display = 'flex';
 	log('');
 	loadRepos();
 	loadRuns();
+	loadTodo();
 	try {
 		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(r.did)}&collection=org.tangled.track.ticket&limit=50`);
 		const records = out.records || [];
@@ -194,6 +196,63 @@ async function openRepo(r) {
 		$('tickets').replaceChildren(emptyEl('listRecords: ' + e.message));
 	}
 }
+
+// ---------- tabs ----------
+
+document.querySelectorAll('.tab').forEach((btn) => {
+	btn.onclick = () => {
+		document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b === btn));
+		for (const t of ['tickets', 'proposals', 'todo']) {
+			$('tab-' + t).style.display = btn.dataset.tab === t ? 'block' : 'none';
+		}
+		if (btn.dataset.tab === 'todo' && current) loadTodo();
+	};
+});
+
+// ---------- todo.md editor ----------
+
+let todoHead = null;
+async function loadTodo() {
+	if (!current) return;
+	$('todo-status').textContent = 'loading…';
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path: 'todo.md', ref: 'main' }, current.did, 'org.tangled.repo.getFile');
+		$('todo-editor').value = out.content;
+		todoHead = out.head;
+		$('todo-status').textContent = (out.content.match(/^- \[[ xX]\]/gm) || []).length + ' items';
+	} catch {
+		$('todo-editor').value = '# todo\n\n- [ ] first task\n';
+		todoHead = null;
+		$('todo-status').textContent = 'new file';
+	}
+}
+
+$('save-todo').onclick = async () => {
+	if (!current) return;
+	$('save-todo').disabled = true;
+	$('todo-status').textContent = 'saving…';
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.putFile', {
+			repo: current.did,
+			path: 'todo.md',
+			content: $('todo-editor').value,
+			baseHead: todoHead || undefined,
+			msg: 'Update todo.md from console',
+		}, current.did, 'org.tangled.repo.putFile');
+		todoHead = out.head;
+		$('todo-status').textContent = 'saved ' + out.commit.slice(0, 8);
+		log('todo.md saved', 'ok');
+	} catch (e) {
+		if (e.status === 409) {
+			log('todo.md changed underneath you — reloading the fresh file', 'err');
+			loadTodo();
+		} else {
+			log('save failed: ' + e.message, 'err');
+		}
+	} finally {
+		$('save-todo').disabled = false;
+	}
+};
 
 function renderTicket(rec) {
 	const v = rec.value || {};
@@ -234,11 +293,99 @@ async function renderProposals(repo, proposals) {
 		el.innerHTML = `<span class="st pull">proposal</span>
 			<div style="min-width:0"><div class="tt"></div>
 			<div class="meta mono">${v.targetBranch || ''}</div>
-			${verdict ? `<div class="verdict"><span class="who">machine review</span><br><span class="vt"></span></div>` : ''}</div>`;
+			${verdict ? `<div class="verdict"><span class="who">machine review</span><br><span class="vt"></span></div>` : ''}
+			<div class="acts">
+				<button class="act merge">merge</button>
+				<button class="act close">close</button>
+				<span class="meta mono pstate"></span>
+			</div></div>`;
 		el.querySelector('.tt').textContent = title;
 		if (verdict) el.querySelector('.vt').textContent = ((verdict.value || {}).body || {}).text || '';
+		const stateEl = el.querySelector('.pstate');
+		if (!agent) {
+			stateEl.textContent = 'sign in to act';
+		} else {
+			el.querySelector('.merge').onclick = async () => {
+				stateEl.textContent = 'merging…';
+				try {
+					const out = await knotFetch('POST', '/org.tangled.git.merge', {
+						repo: repo.did, base: 'main', head: v.targetBranch,
+					}, repo.did, 'org.tangled.git.merge');
+					stateEl.textContent = out.fastForward ? 'fast-forwarded' : 'merged ' + out.commit.slice(0, 8);
+					// mark the ticket closed with a merge comment
+					try {
+						await knotFetch('POST', '/com.atproto.repo.createRecord', {
+							repo: repo.did,
+							collection: 'org.tangled.feed.comment',
+							record: {
+								$type: 'org.tangled.feed.comment',
+								subject: { uri: rec.uri, cid: rec.cid },
+								body: { $type: 'org.tangled.markup.markdown', text: 'merged by ' + agentDID },
+								createdAt: new Date().toISOString(),
+							},
+						}, repo.did, 'com.atproto.repo.createRecord');
+					} catch { /* comment is best-effort */ }
+					openRepo(repo);
+				} catch (e) {
+					stateEl.textContent = 'failed: ' + e.message;
+				}
+			};
+			el.querySelector('.close').onclick = async () => {
+				stateEl.textContent = 'closing…';
+				try {
+					await knotFetch('POST', '/com.atproto.repo.putRecord', {
+						repo: repo.did, collection: 'org.tangled.track.ticket', rkey,
+						record: { ...v, state: 'closed' },
+					}, repo.did, 'com.atproto.repo.putRecord');
+					stateEl.textContent = 'closed';
+					openRepo(repo);
+				} catch (e) {
+					stateEl.textContent = 'failed: ' + e.message;
+				}
+			};
+		}
 		return el;
 	}));
+}
+
+// ---------- live firehose (HTTP poll; WS frames are binary dag-cbor) ----------
+
+let liveCursor = 0, liveFail = 0;
+async function pollLive() {
+	if (document.hidden || !$('live')) return;
+	try {
+		const out = await xrpc('GET', '/com.atproto.sync.getEvents?cursor=' + liveCursor + '&limit=25');
+		const events = out.events || [];
+		for (const ev of events) {
+			liveCursor = Math.max(liveCursor, ev.seq || 0);
+			const box = $('live');
+			if (!box) break;
+			const el = document.createElement('div');
+			el.className = 'run';
+			el.innerHTML = `<span class="st done">•</span> <span class="mono" style="font-size:11px"></span>`;
+			el.querySelector('.mono').textContent =
+				shortRepo(ev.repo) + ' ' + (ev.kind || 'commit') +
+				(ev.change ? ' ' + String(ev.change).slice(0, 7) : '');
+			el.title = (ev.repo || '') + ' @' + (ev.rev || '');
+			box.prepend(el);
+			while (box.children.length > 14) box.lastChild.remove();
+		}
+		$('live-dot').className = 'dot on';
+		liveFail = 0;
+	} catch {
+		if (++liveFail > 3) {
+			$('live-dot').className = 'dot';
+		}
+	}
+}
+
+function scheduleLiveRetry() {
+	setInterval(() => { pollLive().catch(() => {}); }, 2000);
+}
+
+function shortRepo(did) {
+	if (!did) return '';
+	return (did.split(':repo:')[1] || did).slice(0, 18);
 }
 
 $('create-repo').onclick = async () => {
@@ -306,5 +453,5 @@ if (location.pathname === '/oauth/callback/') {
 			$('status').textContent = 'sign-in failed: ' + (e.message || e);
 		});
 } else if (document.getElementById('repos')) {
-	resumeSession().then(() => { loadRepos(); loadRuns(); });
+	resumeSession().then(() => { loadRepos(); loadRuns(); scheduleLiveRetry(); });
 }

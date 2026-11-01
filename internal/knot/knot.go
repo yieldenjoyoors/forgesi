@@ -12,6 +12,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 
+	"github.com/yieldenjoyoors/forgesi/internal/atauth"
 	"github.com/yieldenjoyoors/forgesi/internal/cob"
 )
 
@@ -86,11 +87,14 @@ func New(opt Options) *Knot {
 	k.wsRoutes()
 	k.mintRoutes()
 	k.fleetRoutes()
+	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.getFile", k.handleGetFile)
+	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.putFile", k.handlePutFile)
+	k.mux.HandleFunc("POST /xrpc/org.tangled.git.merge", k.handleMerge)
 	return k
 }
 
 func (k *Knot) routes() {
-	k.mux.HandleFunc("GET /.well-known/did.json", k.handleDid)
+	k.mux.HandleFunc("GET /.well-known/did.json", k.handleKnotDidDoc)
 	k.mux.HandleFunc("GET /xrpc/_health", k.handleHealth)
 	k.mux.HandleFunc("GET /xrpc/org.tangled.knot.describeKnot", k.handleDescribeKnot)
 }
@@ -114,26 +118,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // didDocument is the knot's did:web identity. Consumers resolve the repo
 // DID's doc for a TangledKnot service to find the hosting knot; the knot's
 // own doc declares the same service type at its origin.
-type didDocument struct {
-	Context         string         `json:"@context"`
-	ID              string         `json:"id"`
-	VerificationMet []verifyMethod `json:"verificationMethod,omitempty"`
-	Service         []didService   `json:"service"`
-}
-
-type verifyMethod struct {
-	ID                 string `json:"id"`
-	Type               string `json:"type"`
-	Controller         string `json:"controller"`
-	PublicKeyMultibase string `json:"publicKeyMultibase,omitempty"`
-}
-
-type didService struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	ServiceEndpoint string `json:"serviceEndpoint"`
-}
-
 func (k *Knot) did() string {
 	// did:web encodes the host with port digits percent-escaped; origins
 	// without a port need no escaping.
@@ -142,27 +126,6 @@ func (k *Knot) did() string {
 
 func (k *Knot) origin() string {
 	return "https://" + k.opt.Host
-}
-
-func (k *Knot) handleDid(w http.ResponseWriter, r *http.Request) {
-	doc := didDocument{
-		Context: "https://www.w3.org/ns/did/v1",
-		ID:      k.did(),
-		Service: []didService{{
-			ID:              k.did() + "#tangled_knot",
-			Type:            "TangledKnot",
-			ServiceEndpoint: k.origin(),
-		}},
-	}
-	if k.opt.PublicKeyMultibase != "" {
-		doc.VerificationMet = []verifyMethod{{
-			ID:                 k.did() + "#knot_signing_key",
-			Type:               "EcdsaSecp256k1VerificationKey2019",
-			Controller:         k.did(),
-			PublicKeyMultibase: k.opt.PublicKeyMultibase,
-		}}
-	}
-	writeJSON(w, http.StatusOK, doc)
 }
 
 func (k *Knot) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +140,32 @@ type describeKnotResponse struct {
 	Did          string   `json:"did"`
 	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities"`
+}
+
+// handleKnotDidDoc serves the knot's own DID document. It carries the
+// signing key so service-auth tokens issued with iss = the knot DID (the
+// knot acting as an editor — repo bootstrap, reviews) verify the standard
+// way, and so the root doc resolves like any repo doc does.
+func (k *Knot) handleKnotDidDoc(w http.ResponseWriter, r *http.Request) {
+	did := k.did()
+	doc := map[string]any{
+		"@context": "https://www.w3.org/ns/did/v1",
+		"id":       did,
+		"service": []any{map[string]any{
+			"id":              did + "#tangled_knot",
+			"type":            "TangledKnot",
+			"serviceEndpoint": k.origin(),
+		}},
+	}
+	if k.opt.MintKey != nil {
+		doc["verificationMethod"] = []any{map[string]any{
+			"id":                 did + "#knot_key",
+			"type":               "EcdsaSecp256k1VerificationKey2019",
+			"controller":         did,
+			"publicKeyMultibase": "z" + atauth.Base58Encode(k.opt.MintKey.PubKey().SerializeCompressed()),
+		}}
+	}
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (k *Knot) handleDescribeKnot(w http.ResponseWriter, r *http.Request) {

@@ -11,6 +11,26 @@ import (
 // did:web:forgesi.org:repo:<name> resolves at
 // https://forgesi.org/repo:<name>/did.json — the #tangled_knot service
 // entry is how every atproto consumer finds the hosting knot.
+// ResolveSelf answers DID documents for identities THIS knot hosts: its
+// own did:web and every repo did:web below it. The worker cannot fetch
+// its own origin (the request loops back into the same worker and dies on
+// Cloudflare's recursion guard), so verification of self-issued tokens
+// resolves in-process. Returns nil for foreign dids.
+func (k *Knot) ResolveSelf(did string) *atauth.DIDDoc {
+	if did != k.did() && !strings.HasPrefix(did, k.did()+":repo:") {
+		return nil
+	}
+	doc := &atauth.DIDDoc{}
+	if k.opt.MintKey != nil {
+		doc.Keys = append(doc.Keys, atauth.DIDKey{
+			ID:        did + "#knot_key",
+			Type:      "EcdsaSecp256k1VerificationKey2019",
+			Multibase: "z" + atauth.Base58Encode(k.opt.MintKey.PubKey().SerializeCompressed()),
+		})
+	}
+	return doc
+}
+
 func (k *Knot) didDocRoutes() {
 	k.mux.HandleFunc("GET /{repodid}/did.json", k.handleRepoDidDoc)
 }

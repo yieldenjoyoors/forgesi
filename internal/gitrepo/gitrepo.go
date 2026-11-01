@@ -332,11 +332,21 @@ func commitField(data []byte, field string) string {
 // CommitFile writes one file's new content (or deletes it when nil) and
 // advances branch, returning the new commit oid. Parents chain correctly.
 func (r Repo) CommitFile(branch, path string, content []byte, msg, ident string) (string, error) {
+	return r.CommitFileOn(branch, "", path, content, msg, ident)
+}
+
+// CommitFileOn commits path onto branch. forkFrom pins the parent for a
+// branch that does not exist yet (forking from another branch's head);
+// an existing branch always chains to its own head.
+func (r Repo) CommitFileOn(branch, forkFrom, path string, content []byte, msg, ident string) (string, error) {
 	parents, err := r.Branches()
 	if err != nil {
 		return "", err
 	}
 	parent := parents[branch]
+	if parent == "" && forkFrom != "" {
+		parent = forkFrom
+	}
 	var treeRoot string
 	if parent != "" {
 		pc, err := r.ReadObject(parent)

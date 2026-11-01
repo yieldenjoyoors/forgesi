@@ -24,6 +24,8 @@
     <div class="repolist" id="repos"></div>
     <h3 style="margin-top:22px">fleet</h3>
     <div id="runs" class="runlist"><div class="empty">—</div></div>
+    <h3 style="margin-top:22px">live <span class="dot" id="live-dot"></span></h3>
+    <div id="live" class="runlist"><div class="empty">connecting…</div></div>
     <h3 style="margin-top:22px">new repo</h3>
     <div class="newform" style="flex-direction:column">
       <input type="text" id="new-repo" placeholder="name" style="width:100%">
@@ -36,12 +38,28 @@
       <h1 id="repo-title">Pick a repo</h1>
       <span class="did mono dim" id="repo-did"></span>
     </div>
-    <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
-    <h3 class="prophead mono dim">proposals &amp; verdicts</h3>
-    <div class="ticketlist" id="proposals"></div>
-    <div class="newform" id="ticket-form" style="display:none">
-      <input type="text" id="new-ticket" placeholder="describe the work — one line, one task" style="flex:1">
-      <button id="create-ticket">open ticket</button>
+    <div class="tabs" id="tabs" style="display:none">
+      <button class="tab on" data-tab="tickets">tickets</button>
+      <button class="tab" data-tab="proposals">proposals</button>
+      <button class="tab" data-tab="todo">todo.md</button>
+    </div>
+    <div id="tab-tickets">
+      <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
+      <div class="newform" id="ticket-form" style="display:none">
+        <input type="text" id="new-ticket" placeholder="describe the work — one line, one task" style="flex:1">
+        <button id="create-ticket">open ticket</button>
+      </div>
+    </div>
+    <div id="tab-proposals" style="display:none">
+      <div class="ticketlist" id="proposals"></div>
+    </div>
+    <div id="tab-todo" style="display:none">
+      <div class="newform" style="margin-bottom:8px">
+        <span class="mono dim" id="todo-status" style="align-self:center">—</span>
+        <button id="save-todo">save</button>
+      </div>
+      <textarea id="todo-editor" class="mono" spellcheck="false"
+        style="width:100%;min-height:300px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;color:var(--ink);resize:vertical"></textarea>
     </div>
     <div class="flash" id="flash"></div>
   </main>
