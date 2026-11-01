@@ -33,5 +33,17 @@ jobs:
           KNOT: https://forgesi.org
           LLM_KEY: ${{ secrets.GLM_API_KEY }}
           KNOT_RUNNER_KEY: ${{ secrets.KNOT_RUNNER_KEY }}
+          WRANGLER_LOG: debug
         run: |
-          npx -y wrangler@4.156.0 deploy
+          set -o pipefail
+          npx -y wrangler@4.156.0 deploy --verbose 2>&1 | tee deploy.log
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "### wrangler deploy output (tail)"
+              echo '```'
+              tail -60 deploy.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
