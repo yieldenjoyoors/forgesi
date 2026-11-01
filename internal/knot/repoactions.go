@@ -120,6 +120,9 @@ func (k *Knot) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	}
 	head, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/" + branch)
 	k.emit(body.Repo, "commit", "", body.Path, commit, head, map[string]any{"path": body.Path})
+	if body.Path == "todo.md" && branch == "main" {
+		k.TryRun(body.Repo) // the queue changed — start work now
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"commit": commit, "head": head})
 }
 

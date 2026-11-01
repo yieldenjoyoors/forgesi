@@ -343,6 +343,9 @@ func (k *Knot) handleReceivePack(w http.ResponseWriter, r *http.Request) {
 	// Publish the refs snapshot record (rkey 'self') — the signal knots
 	// emit for mirrors/indexers, and our own console's branch list.
 	k.publishRefsRecord(acc, editor)
+
+	// event-driven fleet: a push to the default branch may open work
+	k.TryRun(acc.Did)
 }
 
 // publishRefsRecord writes org.tangled.git.refs (rkey 'self') with the

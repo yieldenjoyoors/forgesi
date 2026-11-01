@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -32,58 +33,6 @@ func (k *Knot) fleetRoutes() {
 // tick is the orchestrator: assign + start one run per repo with an open
 // item. Starter launches the run (runner fetch in production; the local
 // E2E pulls via nextRun).
-func (k *Knot) tick() error {
-	if k.opt.DB == nil || k.opt.MintKey == nil {
-		return fmt.Errorf("fleet requires D1 and a signing key")
-	}
-	for _, repo := range k.registry.list() {
-		gr := gitrepo.Repo{Be: k.be, RefPrefix: "git/" + repo.Did + "/"}
-		content, err := gr.ReadFileAt("", "todo.md")
-		if err != nil {
-			continue // no todo.md yet
-		}
-		items := todo.Parse(string(content))
-		item, ok := todo.Pick(items)
-		if !ok {
-			continue
-		}
-		if k.hasRunningRun(repo.Did) {
-			continue // one run per repo at a time
-		}
-		agent := "agent-1"
-		// 1. the attributed assignment commit
-		updated := todo.Assign(string(content), item.Line, agent, "in-progress")
-		if _, err := gr.CommitFile(repo.DefaultBranch, "todo.md", []byte(updated),
-			"orchestrator: assign '"+item.Title+"' to @"+agent,
-			"orchestrator <orchestrator@knot>"); err != nil {
-			continue
-		}
-		// 2. mint the run's push token (agent branch)
-		branch := fmt.Sprintf("agent/%d", item.Line)
-		token, err := atauth.Mint(k.opt.MintKey, repo.Did, k.did(),
-			"org.tangled.git.receivePack", 30*time.Minute, time.Now())
-		if err != nil {
-			continue
-		}
-		// 3. record the run
-		runID := newRunID()
-		_, err = k.opt.DB.Exec(
-			`INSERT OR REPLACE INTO knot_runs (id, repo, branch, todo_line, todo_title, status, created_at) VALUES (?, ?, ?, ?, ?, 'running', ?)`,
-			runID, repo.Did, branch, item.Line, item.Title, time.Now().UTC().Format(time.RFC3339))
-		if err != nil {
-			continue
-		}
-		// 4. start the run
-		if k.opt.Starter != nil {
-			_ = k.opt.Starter(RunRequest{
-				RunID: runID, Repo: repo.Did, Branch: branch,
-				TodoTitle: item.Title, Token: token,
-			})
-		}
-	}
-	return nil
-}
-
 // RunRequest is the payload a runner receives.
 type RunRequest struct {
 	RunID     string `json:"runId"`
@@ -91,6 +40,82 @@ type RunRequest struct {
 	Branch    string `json:"branch"`
 	TodoTitle string `json:"todoTitle"`
 	Token     string `json:"token"`
+}
+
+func (k *Knot) tick() error {
+	if k.opt.DB == nil || k.opt.MintKey == nil {
+		return fmt.Errorf("fleet requires D1 and a signing key")
+	}
+	for _, repo := range k.registry.list() {
+		k.tickRepo(repo)
+	}
+	return nil
+}
+
+// TryRun kicks the fleet for one repo immediately — called on pushes and
+// todo.md edits so runs start with zero lag. The cron tick stays as the
+// safety net. Cheap no-op when there is nothing assignable.
+func (k *Knot) TryRun(repoDID string) {
+	waitUntilHook(func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				fmt.Fprintln(os.Stderr, "tryRun panicked:", rec)
+			}
+		}()
+		if repo, ok := k.registry.byDID(repoDID); ok {
+			k.tickRepo(*repo)
+		}
+	})
+}
+
+func (k *Knot) tickRepo(repo repoAccount) {
+	if k.opt.DB == nil || k.opt.MintKey == nil {
+		return
+	}
+	gr := gitrepo.Repo{Be: k.be, RefPrefix: "git/" + repo.Did + "/"}
+	content, err := gr.ReadFileAt("", "todo.md")
+	if err != nil {
+		return // no todo.md yet
+	}
+	items := todo.Parse(string(content))
+	item, ok := todo.Pick(items)
+	if !ok {
+		return
+	}
+	if k.hasRunningRun(repo.Did) {
+		return // one run per repo at a time
+	}
+	agent := "agent-1"
+	// 1. the attributed assignment commit
+	updated := todo.Assign(string(content), item.Line, agent, "in-progress")
+	if _, err := gr.CommitFile(repo.DefaultBranch, "todo.md", []byte(updated),
+		"orchestrator: assign '"+item.Title+"' to @"+agent,
+		"orchestrator <orchestrator@knot>"); err != nil {
+		return
+	}
+	// 2. mint the run's push token (agent branch)
+	branch := fmt.Sprintf("agent/%d", item.Line)
+	token, err := atauth.Mint(k.opt.MintKey, repo.Did, k.did(),
+		"org.tangled.git.receivePack", 30*time.Minute, time.Now())
+	if err != nil {
+		return
+	}
+	// 3. record the run
+	runID := newRunID()
+	_, err = k.opt.DB.Exec(
+		`INSERT OR REPLACE INTO knot_runs (id, repo, branch, todo_line, todo_title, status, created_at) VALUES (?, ?, ?, ?, ?, 'running', ?)`,
+		runID, repo.Did, branch, item.Line, item.Title, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return
+	}
+	// 4. start the run (push) or leave it queued for a pull-mode runner
+	req := RunRequest{
+		RunID: runID, Repo: repo.Did, Branch: branch,
+		TodoTitle: item.Title, Token: token,
+	}
+	if k.opt.Starter != nil || k.opt.RunnerURL != "" {
+		k.wakeRunner(req)
+	}
 }
 
 // wakeRunner starts a run in push mode: Starter first (the prod wiring),
@@ -113,8 +138,7 @@ func (k *Knot) wakeRunner(req RunRequest) {
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+k.opt.RunnerKey)
 		httpReq.Header.Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 15 * time.Second}
-		res, err := client.Do(httpReq)
+		res, err := outboundHTTP.Do(httpReq)
 		if err != nil {
 			return
 		}
