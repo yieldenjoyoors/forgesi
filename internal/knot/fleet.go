@@ -379,8 +379,13 @@ func (k *Knot) handleRetry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 		return
 	}
+	token, merr := atauth.Mint(k.opt.MintKey, repo, k.did(), "org.tangled.git.receivePack", 30*time.Minute, time.Now())
+	if merr != nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", merr.Error())
+		return
+	}
 	k.wakeRunner(RunRequest{
-		RunID: runID, Repo: repo, Branch: branch, TodoTitle: title,
+		RunID: runID, Repo: repo, Branch: branch, TodoTitle: title, Token: token,
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID, "status": "running"})
 }

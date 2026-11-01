@@ -31,7 +31,11 @@ func main() {
 	key, _ := btcec.PrivKeyFromBytes(keyBytes)
 	iss := os.Args[1]
 	aud := os.Args[2]
-	tok, err := atauth.Mint(key, iss, aud, "", 30*time.Minute, time.Now())
+	lxm := ""
+	if len(os.Args) > 3 {
+		lxm = os.Args[3]
+	}
+	tok, err := atauth.Mint(key, iss, aud, lxm, 30*time.Minute, time.Now())
 	if err != nil {
 		panic(err)
 	}

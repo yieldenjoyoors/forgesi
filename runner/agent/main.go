@@ -23,11 +23,11 @@ import (
 )
 
 var (
-	knot      = env("KNOT", "http://127.0.0.1:8797")
-	runnerKey = env("RUNNER_KEY", "")
-	llmURL    = env("LLM_URL", "https://api.z.ai/api/coding/paas/v4/chat/completions")
-	llmKey    = env("LLM_KEY", "")
-	llmModel  = env("LLM_MODEL", "glm-4.7")
+	knot      = "http://127.0.0.1:8797"
+	runnerKey = ""
+	llmURL    = "https://api.z.ai/api/coding/paas/v4/chat/completions"
+	llmKey    = ""
+	llmModel  = "glm-4.7"
 )
 
 // httpClient is the outbound client; the wasm build swaps it for the
