@@ -10,8 +10,9 @@
   "containers": [
     {
       "class_name": "FleetAgent",
-      "scheduling_policy": "durable_object",
-      "images": { "base": { "dockerfile": "./Dockerfile" } },
+      "image": "./Dockerfile",
+      "max_instances": 5,
+      "instance_type": "basic",
       "observability": { "logs": { "enabled": true } }
     }
   ],
