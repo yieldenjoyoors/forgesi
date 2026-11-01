@@ -1,0 +1,7 @@
+{
+  "name": "forgesi-runner",
+  "private": true,
+  "dependencies": {
+    "@cloudflare/containers": "latest"
+  }
+}
