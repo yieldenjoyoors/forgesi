@@ -12,7 +12,7 @@
       "class_name": "FleetAgent",
       "image": "./Dockerfile",
       "max_instances": 5,
-      "instance_type": "standard-1"
+      "instance_type": "basic"
     }
   ],
 
