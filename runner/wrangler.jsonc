@@ -12,7 +12,8 @@
       "class_name": "FleetAgent",
       "image": "./Dockerfile",
       "max_instances": 5,
-      "instance_type": "basic"
+      "instance_type": "basic",
+      "observability": { "logs": { "enabled": true } }
     }
   ],
 
