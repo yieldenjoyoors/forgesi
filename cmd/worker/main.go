@@ -57,8 +57,8 @@ func main() {
 	mintKey := loadMintKey()
 	var reviewLLM func(system, user string) (string, error)
 	if acct, tok := cloudflare.Getenv("CF_ACCOUNT_ID"), cloudflare.Getenv("CLOUDFLARE_API_TOKEN"); acct != "" && tok != "" {
-		client := &llm.Client{AccountID: acct, Token: tok}
-		reviewLLM = client.Complete
+		// outbound calls in wasm need the fetch-backed transport
+		reviewLLM = (&llm.Client{AccountID: acct, Token: tok, HTTP: httpRuntime}).Complete
 	}
 	knotHandler = knot.New(knot.Options{
 		Host:      strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),

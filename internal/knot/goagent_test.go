@@ -52,7 +52,7 @@ func TestFleetGoAgentEndToEnd(t *testing.T) {
 
 	// build the agent binary once
 	agentBin := filepath.Join(t.TempDir(), "agent")
-	build := exec.Command("go", "build", "-o", agentBin, "github.com/yieldenjoyoors/forgesi/runner/agent")
+	build := exec.Command("go", "build", "-o", agentBin, "github.com/yieldenjoyoors/forgesi/runner/cmd/agent")
 	build.Dir = findRepoRoot(t)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build agent: %v\n%s", err, out)

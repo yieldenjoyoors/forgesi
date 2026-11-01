@@ -24,7 +24,7 @@ func (k *Knot) reviewAsync(repo, ticketURI, ticketCID, base, head, summary strin
 	if k.opt.ReviewLLM == nil {
 		return
 	}
-	go func() {
+	waitUntilHook(func() {
 		defer func() {
 			if rec := recover(); rec != nil {
 				fmt.Fprintln(os.Stderr, "review panicked:", rec)
@@ -41,7 +41,7 @@ func (k *Knot) reviewAsync(repo, ticketURI, ticketCID, base, head, summary strin
 			verdict = fmt.Sprintf("⚠️ reviewer unavailable: %v", err)
 		}
 		k.postComment(repo, ticketURI, ticketCID, verdict, "did:web:"+k.opt.Host+":reviewer")
-	}()
+	})
 }
 
 // diffSummary renders old/new content for every file that changed between
