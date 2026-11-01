@@ -232,7 +232,10 @@ async function openRepo(r) {
 	}
 }
 
-// ---------- tabs ----------
+// ---------- console-only wiring (the callback page has no console DOM) ----------
+
+const isConsole = !!document.getElementById('repos');
+if (isConsole) {
 
 document.querySelectorAll('.tab').forEach((btn) => {
 	btn.onclick = () => {
@@ -474,23 +477,30 @@ document.getElementById('signin').onsubmit = async (e) => {
 	}
 };
 
+}
+
 // ---------- boot ----------
 
 // OAuth callback: the authorization server redirects with params in the
-// hash (not search), finalize then return to the console.
-if (location.pathname === '/oauth/callback/') {
-	$('status').textContent = 'finalizing sign-in…';
+// hash (not search), finalize then return to the console. This page has
+// almost no DOM — nothing else in this module may touch it.
+function callbackBoot() {
+	const statusEl = document.getElementById('status');
 	const params = new URLSearchParams(location.hash.slice(1));
-	history.replaceState(null, '', '/app');
+	history.replaceState(null, '', location.pathname);
 	ensureOAuth();
 	finalizeAuthorization(params)
 		.then(({ session }) => {
+			if (statusEl) statusEl.textContent = 'signed in as ' + session.info.sub + ' — returning…';
 			sessionStorage.setItem('forgesi-did', session.info.sub);
 			location.replace('/app');
 		})
 		.catch((e) => {
-			$('status').textContent = 'sign-in failed: ' + (e.message || e);
+			if (statusEl) statusEl.textContent = 'sign-in failed: ' + (e.message || e);
+			else console.error('sign-in failed', e);
 		});
-} else if (document.getElementById('repos')) {
+}
+
+function consoleBoot() {
 	resumeSession().then(() => { loadRepos(); loadRuns(); scheduleLiveRetry(); });
 }

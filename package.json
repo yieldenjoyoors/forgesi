@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build:web": "esbuild web/src/app.js --bundle --outfile=web/app.js --format=esm --minify --target=es2022"
+    "build:web": "esbuild web/src/app.js --bundle --outfile=web/app.js --format=esm --minify --target=es2022 && esbuild web/src/callback.js --bundle --outfile=web/callback.js --format=esm --minify --target=es2022",
+    "build:callback": "esbuild web/src/callback.js --bundle --outfile=web/callback.js --format=esm --minify --target=es2022"
   },
   "dependencies": {
     "@atcute/client": "^5.1.2",
