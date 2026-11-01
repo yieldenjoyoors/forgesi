@@ -71,6 +71,28 @@ footer {
 
 /* ---------- console shell ---------- */
 .ok-flash { color: var(--good); }
+/* loading states */
+.spin {
+  display: inline-block; width: 13px; height: 13px; vertical-align: -2px;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  border-radius: 50%; animation: rot 0.7s linear infinite;
+}
+.spin.sm { width: 10px; height: 10px; border-width: 2px; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.skel {
+  height: 34px; border-radius: 8px; margin-bottom: 6px;
+  background: linear-gradient(100deg, var(--panel2) 40%, var(--line) 50%, var(--panel2) 60%);
+  background-size: 200% 100%; animation: shimmer 1.2s infinite linear;
+}
+.skel.slim { height: 26px; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+button.busy { opacity: 0.6; pointer-events: none; }
+button.busy::after {
+  content: ''; display: inline-block; width: 10px; height: 10px; margin-left: 8px;
+  vertical-align: -1px; border: 2px solid var(--line); border-top-color: var(--ink);
+  border-radius: 50%; animation: rot 0.7s linear infinite;
+}
+.dim-note { color: var(--ink3); font-size: 11px; font-family: var(--mono); }
 .tabs { display: flex; gap: 4px; margin: 0 0 14px; }
 .tab {
   background: none; border: 1px solid transparent; border-radius: 8px; padding: 5px 12px;

@@ -40,6 +40,34 @@ const handleResolver = new XrpcHandleResolver({ serviceUrl: 'https://public.api.
 const $ = (id) => document.getElementById(id);
 let repos = [], current = null;
 
+function spinEl(small) {
+	const el = document.createElement('span');
+	el.className = 'spin' + (small ? ' sm' : '');
+	return el;
+}
+
+function skeletonRows(n, slim) {
+	const frag = document.createDocumentFragment();
+	for (let i = 0; i < n; i++) {
+		const el = document.createElement('div');
+		el.className = 'skel' + (slim ? ' slim' : '');
+		frag.appendChild(el);
+	}
+	return frag;
+}
+
+async function busy(btn, fn) {
+	if (!btn) return fn();
+	btn.classList.add('busy');
+	btn.disabled = true;
+	try {
+		return await fn();
+	} finally {
+		btn.classList.remove('busy');
+		btn.disabled = false;
+	}
+}
+
 function log(msg, cls) {
 	const f = $('flash');
 	if (f) { f.textContent = msg || ''; f.className = 'flash ' + (cls || ''); }
@@ -143,7 +171,9 @@ async function xrpc(method, path, body) {
 	return json;
 }
 
+let runsLoaded = false;
 async function loadRuns() {
+	if (!runsLoaded) $('runs').replaceChildren(spinEl(), Object.assign(document.createElement('span'), { className: 'dim-note', textContent: ' loading' }));
 	try {
 		const out = await xrpc('GET', '/org.tangled.fleet.runs' + (current ? '?repo=' + encodeURIComponent(current.did) : ''));
 		const runs = out.runs || [];
@@ -160,7 +190,9 @@ async function loadRuns() {
 	} catch { /* best effort */ }
 }
 
+let reposLoaded = false;
 async function loadRepos() {
+	if (!reposLoaded) $('repos').replaceChildren(skeletonRows(4, true));
 	try {
 		const out = await xrpc('GET', '/org.tangled.repo.listRepos');
 		repos = out.repos || [];
@@ -171,6 +203,7 @@ async function loadRepos() {
 			el.onclick = () => openRepo(r);
 			return el;
 		}));
+		reposLoaded = true;
 	} catch (e) { log('listRepos: ' + e.message, 'err'); }
 }
 
@@ -185,6 +218,8 @@ async function openRepo(r) {
 	loadRepos();
 	loadRuns();
 	loadTodo();
+	$('tickets').replaceChildren(skeletonRows(3));
+	$('proposals').replaceChildren(skeletonRows(2));
 	try {
 		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(r.did)}&collection=org.tangled.track.ticket&limit=50`);
 		const records = out.records || [];
@@ -214,23 +249,27 @@ document.querySelectorAll('.tab').forEach((btn) => {
 let todoHead = null;
 async function loadTodo() {
 	if (!current) return;
-	$('todo-status').textContent = 'loading…';
+	const ta = $('todo-editor');
+	ta.disabled = true;
+	$('todo-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' loading' }));
 	try {
 		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path: 'todo.md', ref: 'main' }, current.did, 'org.tangled.repo.getFile');
-		$('todo-editor').value = out.content;
+		ta.value = out.content;
 		todoHead = out.head;
 		$('todo-status').textContent = (out.content.match(/^- \[[ xX]\]/gm) || []).length + ' items';
 	} catch {
-		$('todo-editor').value = '# todo\n\n- [ ] first task\n';
+		ta.value = '# todo\n\n- [ ] first task\n';
 		todoHead = null;
 		$('todo-status').textContent = 'new file';
+	} finally {
+		ta.disabled = false;
 	}
 }
 
 $('save-todo').onclick = async () => {
 	if (!current) return;
 	$('save-todo').disabled = true;
-	$('todo-status').textContent = 'saving…';
+	$('todo-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' saving' }));
 	try {
 		const out = await knotFetch('POST', '/org.tangled.repo.putFile', {
 			repo: current.did,
@@ -305,7 +344,7 @@ async function renderProposals(repo, proposals) {
 		if (!agent) {
 			stateEl.textContent = 'sign in to act';
 		} else {
-			el.querySelector('.merge').onclick = async () => {
+			el.querySelector('.merge').onclick = () => busy(el.querySelector('.merge'), async () => {
 				stateEl.textContent = 'merging…';
 				try {
 					const out = await knotFetch('POST', '/org.tangled.git.merge', {
@@ -329,8 +368,8 @@ async function renderProposals(repo, proposals) {
 				} catch (e) {
 					stateEl.textContent = 'failed: ' + e.message;
 				}
-			};
-			el.querySelector('.close').onclick = async () => {
+			});
+			el.querySelector('.close').onclick = () => busy(el.querySelector('.close'), async () => {
 				stateEl.textContent = 'closing…';
 				try {
 					await knotFetch('POST', '/com.atproto.repo.putRecord', {
@@ -342,7 +381,7 @@ async function renderProposals(repo, proposals) {
 				} catch (e) {
 					stateEl.textContent = 'failed: ' + e.message;
 				}
-			};
+			});
 		}
 		return el;
 	}));
@@ -388,7 +427,7 @@ function shortRepo(did) {
 	return (did.split(':repo:')[1] || did).slice(0, 18);
 }
 
-$('create-repo').onclick = async () => {
+$('create-repo').onclick = () => busy($('create-repo'), async () => {
 	const name = $('new-repo').value.trim();
 	if (!name) return;
 	try {
@@ -399,9 +438,9 @@ $('create-repo').onclick = async () => {
 		const r = repos.find((x) => x.did === out.did);
 		openRepo(r || { did: out.did, name });
 	} catch (e) { log(e.message, 'err'); }
-};
+});
 
-$('create-ticket').onclick = async () => {
+$('create-ticket').onclick = () => busy($('create-ticket'), async () => {
 	const text = $('new-ticket').value.trim();
 	if (!text || !current) return;
 	try {
@@ -419,7 +458,7 @@ $('create-ticket').onclick = async () => {
 		log('ticket opened', 'ok');
 		openRepo(current);
 	} catch (e) { log(e.message, 'err'); }
-};
+});
 
 // ---------- sign-in form ----------
 
