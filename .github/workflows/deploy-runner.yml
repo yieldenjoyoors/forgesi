@@ -25,9 +25,14 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
             -o runner/agent ./runner/agent
 
-      - name: Install runner deps
-        working-directory: runner
-        run: npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
+      - name: Build and push the container image
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          IMAGE: registry.cloudflare.com/96f35316d0a27c2ce00f8aa66e5c7f15/forgesi-runner-fleetagent:latest
+        run: |
+          docker build -t "$IMAGE" runner/
+          docker login registry.cloudflare.com -u oauth2 -p "$CLOUDFLARE_API_TOKEN"
+          docker push "$IMAGE"
 
       - name: Deploy the runner container app
         working-directory: runner
