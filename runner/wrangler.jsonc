@@ -9,23 +9,15 @@
 
   "containers": [
     {
-      "app_name": "forgesi-runner-agent",
       "class_name": "FleetAgent",
       "image": "./Dockerfile",
       "max_instances": 5,
-      "instance_type": "standard"
+      "instance_type": "standard-1"
     }
   ],
 
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["FleetAgent"] }
-  ],
-
-  "bindings": [
-    {
-      "name": "FLEET_AGENT",
-      "class_name": "FleetAgent"
-    }
   ],
 
   "durable_objects": {
