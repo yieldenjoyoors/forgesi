@@ -34,7 +34,7 @@ func (k *Knot) tick() error {
 		return fmt.Errorf("fleet requires D1 and a signing key")
 	}
 	for _, repo := range k.registry.list() {
-		gr := gitrepo.Repo{Be: k.be}
+		gr := gitrepo.Repo{Be: k.be, RefPrefix: "git/" + repo.Did + "/"}
 		content, err := gr.ReadFileAt("", "todo.md")
 		if err != nil {
 			continue // no todo.md yet
@@ -180,22 +180,25 @@ func (k *Knot) handleRunDone(w http.ResponseWriter, r *http.Request) {
 
 	if body.Status == "done" && body.Head != "" {
 		// the proposal: a ticket with targetBranch + the patch record
-		var repo string
-		_ = k.opt.DB.QueryRow(`SELECT repo FROM knot_runs WHERE id = ?`, body.RunID).Scan(&repo)
+		var repo, todoTitle string
+		_ = k.opt.DB.QueryRow(`SELECT repo, todo_title FROM knot_runs WHERE id = ?`, body.RunID).Scan(&repo, &todoTitle)
 		if repo != "" {
-			k.openProposal(repo, body.Branch, body.Base, body.Head, body.Summary)
+			k.openProposal(repo, body.Branch, body.Base, body.Head, body.Summary, todoTitle)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }
 
 // openProposal writes the ticket and patch COBs (the Tangled PR shape).
-func (k *Knot) openProposal(repo, branch, base, head, summary string) {
+func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string) {
+	if todoTitle == "" {
+		todoTitle = summary
+	}
 	editor := "did:web:" + k.opt.Host + ":orchestrator"
 	now := time.Now().UTC().Format(time.RFC3339)
 	ticket := map[string]any{
 		"$type":        "org.tangled.track.ticket",
-		"title":        map[string]any{"$type": "org.tangled.markup.markdown#inline", "text": "agent: " + summary},
+		"title":        map[string]any{"$type": "org.tangled.markup.markdown#inline", "text": "agent: " + todoTitle},
 		"body":         map[string]any{"$type": "org.tangled.markup.markdown", "text": summary},
 		"state":        "open",
 		"targetBranch": branchOf(base),

@@ -23,9 +23,16 @@ type Backend interface {
 	ListRefs(prefix, after string, limit int) ([]string, error)
 }
 
-// Repo is one git repository's object/ref namespace.
+// Repo is one git repository's object/ref namespace. RefPrefix scopes all
+// branch refs (the knot uses "git/<repoDID>/" — refs are per repo, and the
+// shared object pool stays deduplicated across them).
 type Repo struct {
-	Be Backend
+	Be        Backend
+	RefPrefix string
+}
+
+func (r Repo) ref(branch string) string {
+	return r.RefPrefix + "refs/heads/" + strings.TrimPrefix(branch, "refs/heads/")
 }
 
 // Parsed is a decoded framed object.
@@ -220,23 +227,23 @@ func (r Repo) ApplyPush(objects []packfile.Object, updates map[string]string) er
 				}
 			}
 		}
-		if err := r.Be.SetRef("refs/heads/"+strings.TrimPrefix(ref, "refs/heads/"), newOID); err != nil {
+		if err := r.Be.SetRef(r.ref(ref), newOID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Branches lists refs/heads/* with their heads.
+// Branches lists the repo's branches with their heads.
 func (r Repo) Branches() (map[string]string, error) {
-	refs, err := r.Be.ListRefs("refs/heads/", "", 1000)
+	refs, err := r.Be.ListRefs(r.RefPrefix+"refs/heads/", "", 1000)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]string{}
 	for _, ref := range refs {
 		if oid, ok, err := r.Be.RefHead(ref); err == nil && ok && oid != "" {
-			out[strings.TrimPrefix(ref, "refs/heads/")] = oid
+			out[strings.TrimPrefix(strings.TrimPrefix(ref, r.RefPrefix), "refs/heads/")] = oid
 		}
 	}
 	return out, nil
@@ -354,7 +361,7 @@ func (r Repo) CommitFile(branch, path string, content []byte, msg, ident string)
 	if err != nil {
 		return "", err
 	}
-	if err := r.Be.SetRef("refs/heads/"+branch, oid); err != nil {
+	if err := r.Be.SetRef(r.ref(branch), oid); err != nil {
 		return "", err
 	}
 	return oid, nil
@@ -405,3 +412,80 @@ func (r Repo) upsertPath(treeOID string, path []string, content []byte) (string,
 
 // timeNow is a seam for deterministic tests.
 var timeNow = func() time.Time { return time.Now().UTC() }
+
+// WriteTreeFromFiles composes (nested) trees for a full file map and
+// returns the root tree oid — the write side of materialization.
+func (r Repo) WriteTreeFromFiles(files map[string][]byte) (string, error) {
+	type node struct {
+		blob     []byte
+		children map[string]*node
+	}
+	root := &node{children: map[string]*node{}}
+	for path, content := range files {
+		parts := strings.Split(path, "/")
+		cur := root
+		for _, p := range parts[:len(parts)-1] {
+			if cur.children[p] == nil {
+				cur.children[p] = &node{children: map[string]*node{}}
+			}
+			cur = cur.children[p]
+		}
+		cur.children[parts[len(parts)-1]] = &node{blob: content}
+	}
+	var build func(n *node) (string, error)
+	build = func(n *node) (string, error) {
+		entries := []TreeEntry{}
+		for name, child := range n.children {
+			if len(child.children) > 0 { // directory node
+				sub, err := build(child)
+				if err != nil {
+					return "", err
+				}
+				entries = append(entries, TreeEntry{Mode: "40000", Name: name, OID: sub})
+				continue
+			}
+			blobOID, err := r.StoreObject("blob", child.blob)
+			if err != nil {
+				return "", err
+			}
+			entries = append(entries, TreeEntry{Mode: "100644", Name: name, OID: blobOID})
+		}
+		return r.StoreObject("tree", EncodeTree(entries))
+	}
+	return build(root)
+}
+
+// Materialize expands a commit's tree into a path->content map.
+func (r Repo) Materialize(commitOID string) (map[string][]byte, error) {
+	files := map[string][]byte{}
+	var walk func(treeOID, prefix string) error
+	walk = func(treeOID, prefix string) error {
+		t, err := r.ReadObject(treeOID)
+		if err != nil {
+			return err
+		}
+		for _, e := range ParseTree(t.Data) {
+			switch e.Mode {
+			case "40000":
+				if err := walk(e.OID, prefix+e.Name+"/"); err != nil {
+					return err
+				}
+			case "100644", "100755":
+				b, err := r.ReadObject(e.OID)
+				if err != nil {
+					return err
+				}
+				files[prefix+e.Name] = b.Data
+			}
+		}
+		return nil
+	}
+	c, err := r.ReadObject(commitOID)
+	if err != nil {
+		return nil, err
+	}
+	if err := walk(commitField(c.Data, "tree"), ""); err != nil {
+		return nil, err
+	}
+	return files, nil
+}

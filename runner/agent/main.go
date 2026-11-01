@@ -1,0 +1,424 @@
+// Command agent is the ForgeSI fleet runner: pull a run, clone the repo
+// natively (smart-HTTP v2 over the knot), do the work with an LLM, push
+// the branch, report done. Pure Go — the fleet container is a static
+// binary in a scratch image; no interpreter, no git binary (this binary
+// speaks the git wire protocol itself via internal/packfile).
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/yieldenjoyoors/forgesi/internal/gitrepo"
+	"github.com/yieldenjoyoors/forgesi/internal/packfile"
+	"github.com/yieldenjoyoors/forgesi/internal/packline"
+)
+
+var (
+	knot      = env("KNOT", "http://127.0.0.1:8797")
+	runnerKey = env("RUNNER_KEY", "")
+	llmURL    = env("LLM_URL", "https://api.z.ai/api/coding/paas/v4/chat/completions")
+	llmKey    = env("LLM_KEY", "")
+	llmModel  = env("LLM_MODEL", "glm-4.7")
+)
+
+func env(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
+
+func log(a ...any) { fmt.Fprintln(os.Stderr, a...) }
+
+// memBackend is the agent's local object store for the clone it works on.
+type memBackend struct{ objects map[string][]byte }
+
+func newMemBackend() *memBackend { return &memBackend{objects: map[string][]byte{}} }
+func (m *memBackend) PutObject(c []byte) (string, error) {
+	oid := packfile.OID(c)
+	m.objects[oid] = c
+	return oid, nil
+}
+func (m *memBackend) GetObject(oid string) ([]byte, error) {
+	c, ok := m.objects[oid]
+	if !ok {
+		return nil, fmt.Errorf("object %s missing", oid)
+	}
+	return c, nil
+}
+func (m *memBackend) RefHead(ref string) (string, bool, error) { return "", false, nil }
+func (m *memBackend) SetRef(ref, oid string) error             { return nil }
+func (m *memBackend) ListRefs(prefix, after string, limit int) ([]string, error) {
+	return nil, nil
+}
+
+type runRequest struct {
+	RunID     string `json:"runId"`
+	Repo      string `json:"repo"`
+	Branch    string `json:"branch"`
+	TodoTitle string `json:"todoTitle"`
+	Token     string `json:"token"`
+}
+
+func xrpc(method, path string, body any, token string, out any) error {
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, knot+path, rd)
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode >= 300 {
+		b, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("%s %s: %d %s", method, path, res.StatusCode, b)
+	}
+	if out != nil {
+		return json.NewDecoder(res.Body).Decode(out)
+	}
+	return nil
+}
+
+// clone fetches the repo head via smart-HTTP v2 and materializes files.
+func clone(repo string) (gitrepo.Repo, string, map[string][]byte, error) {
+	be := newMemBackend()
+	gr := gitrepo.Repo{Be: be}
+	base := knot + "/" + repo
+
+	// ls-refs → default branch head
+	var cmd bytes.Buffer
+	cmd.Write(packline.Pkt("command=ls-refs\n"))
+	cmd.Write(packline.Pkt("agent=forgesi-agent/0.1\n"))
+	cmd.Write(packline.DelimPkt())
+	cmd.Write(packline.Pkt("symrefs\n"))
+	cmd.Write(packline.FlushPkt())
+	res, err := http.Post(base+"/git-upload-pack", "application/x-git-upload-pack-request", &cmd)
+	if err != nil {
+		return gr, "", nil, err
+	}
+	head, err := lsRefsFirst(res.Body)
+	_ = res.Body.Close()
+	if err != nil {
+		return gr, "", nil, err
+	}
+	if head == "" {
+		return gr, "", nil, fmt.Errorf("clone: no head ref found")
+	}
+
+	// fetch: want <head>, done
+	var req bytes.Buffer
+	req.Write(packline.Pkt("command=fetch\n"))
+	req.Write(packline.Pkt("agent=forgesi-agent/0.1\n"))
+	req.Write(packline.DelimPkt())
+	req.Write(packline.Pkt("want " + head + "\n"))
+	req.Write(packline.Pkt("done\n"))
+	req.Write(packline.FlushPkt())
+	res2, err := http.Post(base+"/git-upload-pack", "application/x-git-upload-pack-request", &req)
+	if err != nil {
+		return gr, "", nil, err
+	}
+	if res2.StatusCode >= 300 {
+		b, _ := io.ReadAll(res2.Body)
+		_ = res2.Body.Close()
+		return gr, "", nil, fmt.Errorf("fetch: %d %s", res2.StatusCode, b)
+	}
+	// v2 response: sections; the packfile section header then sideband ch1
+	// chunks; with no haves there is no acknowledgments section.
+	pr := packline.NewReader(res2.Body)
+	var pack bytes.Buffer
+	inPack := false
+	for {
+		payload, kind, err := pr.Next()
+		if err != nil || kind == "flush" {
+			if kind == "flush" && inPack {
+				break
+			}
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if kind == "data" {
+			if !inPack && strings.HasPrefix(string(payload), "packfile") {
+				inPack = true
+				continue
+			}
+			if inPack && len(payload) > 0 && payload[0] == 1 {
+				pack.Write(payload[1:])
+			}
+		}
+	}
+	if pack.Len() == 0 {
+		return gr, "", nil, fmt.Errorf("clone: empty pack (packfile section never found)")
+	}
+	objs, err := packfile.Decode(bytes.NewReader(pack.Bytes()))
+	if err != nil {
+		return gr, "", nil, fmt.Errorf("clone: decode pack: %w", err)
+	}
+	for _, o := range objs {
+		if _, err := be.PutObject(packfile.GitObject(packfile.TypeName(o.Type), o.Data)); err != nil {
+			return gr, "", nil, err
+		}
+	}
+	files, err := gr.Materialize(head)
+	if err != nil {
+		return gr, "", nil, err
+	}
+	return gr, head, files, nil
+}
+
+// lsRefsFirst parses a v2 ls-refs response and returns the default head.
+func lsRefsFirst(r io.Reader) (string, error) {
+	pr := packline.NewReader(r)
+	for {
+		payload, kind, err := pr.Next()
+		if err != nil || kind == "flush" || kind == "delim" {
+			if err != nil {
+				return "", err
+			}
+			continue
+		}
+		line := string(bytes.TrimRight(payload, "\n"))
+		line = strings.SplitN(line, "\x00", 2)[0]
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[1] == "HEAD" {
+			return f[0], nil
+		}
+		if len(f) >= 2 && f[1] == "refs/heads/main" {
+			return f[0], nil
+		}
+	}
+}
+
+// push encodes the reachable objects and runs receive-pack with the token.
+func push(repo, branch, newCommit, token string, gr gitrepo.Repo) error {
+	objs, err := gr.WalkReachable([]string{newCommit})
+	if err != nil {
+		return err
+	}
+	pack, err := packfile.Encode(objs)
+	if err != nil {
+		return err
+	}
+	var body bytes.Buffer
+	oldOID := "0000000000000000000000000000000000000000"
+	body.Write(packline.EncodePkt([]byte(oldOID + " " + newCommit + " refs/heads/" + branch + "\x00 report-status\n")))
+	body.Write(packline.FlushPkt())
+	body.Write(pack)
+	req, _ := http.NewRequest(http.MethodPost, knot+"/"+repo+"/git-receive-pack", &body)
+	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	respBody, _ := io.ReadAll(res.Body)
+	if res.StatusCode >= 300 {
+		return fmt.Errorf("push: %d %s", res.StatusCode, respBody)
+	}
+	if !strings.Contains(string(respBody), "unpack ok") {
+		return fmt.Errorf("push rejected: %s", respBody)
+	}
+	return nil
+}
+
+// chat runs one LLM step; the contract is the same JSON the harness used.
+func chat(prompt string) (done bool, summary string, files map[string][]byte, err error) {
+	payload := map[string]any{
+		"model": llmModel,
+		"messages": []any{
+			map[string]any{"role": "system", "content": systemPrompt},
+			map[string]any{"role": "user", "content": prompt},
+		},
+	}
+	b, _ := json.Marshal(payload)
+	req, _ := http.NewRequest(http.MethodPost, llmURL, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+llmKey)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, "", nil, err
+	}
+	raw, rerr := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if rerr != nil {
+		return false, "", nil, rerr
+	}
+	if res.StatusCode >= 300 {
+		return false, "", nil, fmt.Errorf("llm http %d: %s", res.StatusCode, raw[:min(160, len(raw))])
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return false, "", nil, fmt.Errorf("llm json: %w: len=%d valid=%v body=%q", err, len(raw), json.Valid(raw), raw)
+	}
+	text := strings.TrimSpace(out.Choices[0].Message.Content)
+	text = strings.TrimPrefix(strings.TrimPrefix(text, "```json"), "```")
+	text = strings.TrimSuffix(text, "```")
+	var parsed struct {
+		Done    bool              `json:"done"`
+		Summary string            `json:"summary"`
+		Files   map[string]string `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		return false, "", nil, fmt.Errorf("llm json: %w: %s", err, text[:min(120, len(text))])
+	}
+	files = map[string][]byte{}
+	for p, c := range parsed.Files {
+		files[p] = []byte(c)
+	}
+	return parsed.Done, parsed.Summary, files, nil
+}
+
+const systemPrompt = `You are a coding agent working in a git repository.
+Reply ONLY with a JSON object: {"done": bool, "summary": string (what you did, one line), "files": {"path": "full new file content", ...}}.
+Write complete file contents for every file you create or change; omit files you don't touch. When the task is complete, set done=true. Never run git commands.`
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func main() {
+	if os.Getenv("RUN_MODE") == "serve" {
+		serve()
+		return
+	}
+	// pull mode: fetch the next queued run and execute it
+	var run runRequest
+	if err := xrpc(http.MethodGet, "/xrpc/org.tangled.fleet.nextRun", nil, runnerKey, &run); err != nil {
+		log("no run:", err)
+		os.Exit(0)
+	}
+	runOne(run)
+}
+
+// serve is the container entrypoint: Cloudflare Containers drive the app
+// over HTTP; each POST /run executes one agent loop asynchronously.
+func serve() {
+	http.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
+		var run runRequest
+		if err := json.NewDecoder(r.Body).Decode(&run); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log("run panicked:", rec)
+					report(run.RunID, "failed", fmt.Sprintf("panic: %v", rec), "", "", "")
+				}
+			}()
+			runOne(run)
+		}()
+		w.WriteHeader(http.StatusAccepted)
+	})
+	http.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	log("fleet agent serving on :8080")
+	_ = http.ListenAndServe(":8080", nil)
+}
+
+// runOne executes a single run end-to-end.
+func runOne(run runRequest) {
+	log("run", run.RunID, run.Repo, "branch", run.Branch, "-", run.TodoTitle)
+
+	gr, base, files, err := clone(run.Repo)
+	if err != nil {
+		report(run.RunID, "failed", "clone: "+err.Error(), "", "", "")
+		return
+	}
+	log("cloned", len(files), "files at", base[:min(8, len(base))])
+
+	var listing []string
+	for p := range files {
+		listing = append(listing, p)
+	}
+	sort.Strings(listing)
+	prompt := "Repository files:\n" + strings.Join(listing, "\n") +
+		"\n\nTask: " + run.TodoTitle + "\nDo the task. Reply with the JSON described."
+
+	merged := map[string][]byte{}
+	for p, c := range files {
+		merged[p] = c
+	}
+	done, summary := false, ""
+	for step := 0; step < 5; step++ {
+		done, summary, files, err = chat(prompt)
+		if err != nil {
+			report(run.RunID, "failed", "llm: "+err.Error(), "", "", "")
+			return
+		}
+		for p, c := range files {
+			merged[p] = c
+		}
+		if done {
+			break
+		}
+		prompt = "Continue the task. Reply with the JSON described."
+	}
+	if len(files) == 0 {
+		report(run.RunID, "failed", "agent produced no changes", "", "", "")
+		return
+	}
+
+	// build the new tree+commit natively
+	treeOID, err := gr.WriteTreeFromFiles(merged)
+	if err != nil {
+		report(run.RunID, "failed", "tree: "+err.Error(), "", "", "")
+		return
+	}
+	commitContent := gitrepo.EncodeCommit(gitrepo.CommitSpec{
+		Tree: treeOID, Parents: []string{base},
+		Message: "agent: " + run.TodoTitle,
+		When:    time.Now().UTC(), Ident: "fleet-agent <agent@knot>",
+	})
+	newCommit, err := gr.StoreObject("commit", commitContent)
+	if err != nil {
+		report(run.RunID, "failed", "commit: "+err.Error(), "", "", "")
+		return
+	}
+	if err := push(run.Repo, run.Branch, newCommit, run.Token, gr); err != nil {
+		report(run.RunID, "failed", "push: "+err.Error(), "", "", "")
+		return
+	}
+	log("pushed", newCommit[:min(8, len(newCommit))])
+	report(run.RunID, "done", summary, run.Branch, base, newCommit)
+}
+
+func report(runID, status, summary, branch, base, head string) {
+	if status != "done" {
+		log("run failed:", summary)
+	}
+	if err := xrpc(http.MethodPost, "/xrpc/org.tangled.fleet.runDone", map[string]any{
+		"runId": runID, "status": status, "summary": summary,
+		"branch": branch, "base": base, "head": head,
+	}, runnerKey, nil); err != nil {
+		log("report:", err)
+	}
+}

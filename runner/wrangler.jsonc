@@ -1,0 +1,34 @@
+{
+  // ForgeSI fleet runner: a Cloudflare Containers app. The knot's
+  // orchestrator (cron) starts runs; each POST /run executes one agent
+  // loop (clone from the knot, LLM work, push the branch, report done).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "forgesi-runner",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-01",
+
+  "containers": [
+    {
+      "app_name": "forgesi-runner-agent",
+      "class_name": "FleetAgent",
+      "image": "./Dockerfile",
+      "max_instances": 5,
+      "instance_type": "standard"
+    }
+  ],
+
+  "bindings": [
+    {
+      "name": "FLEET_AGENT",
+      "class_name": "FleetAgent"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "name": "FLEET_AGENT_DO", "class_name": "FleetAgent" }]
+  },
+
+  "vars": {
+    "KNOT": "https://forgesi.org"
+  }
+}

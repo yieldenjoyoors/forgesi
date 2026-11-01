@@ -63,7 +63,7 @@ func TestFleetTickAssignsAndMints(t *testing.T) {
 	h.TickInternal()
 
 	// the assignment commit landed on main
-	gr := gitrepo.Repo{Be: h.be}
+	gr := gitrepo.Repo{Be: h.be, RefPrefix: "git/did:web:forgesi.org:repo:fleet/"}
 	content, err := gr.ReadFileAt("", "todo.md")
 	if err != nil {
 		t.Fatal(err)

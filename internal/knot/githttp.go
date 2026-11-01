@@ -43,7 +43,7 @@ func (k *Knot) repoFor(w http.ResponseWriter, r *http.Request) (*repoAccount, gi
 		writeErr(w, http.StatusNotFound, "NotFound", "no such repo")
 		return nil, gitrepo.Repo{}, false
 	}
-	return acc, gitrepo.Repo{Be: k.storeBackend()}, true
+	return acc, gitrepo.Repo{Be: k.storeBackend(), RefPrefix: "git/" + acc.Did + "/"}, true
 }
 
 func (k *Knot) storeBackend() cob.Backend { return k.be }
@@ -348,7 +348,7 @@ func (k *Knot) handleReceivePack(w http.ResponseWriter, r *http.Request) {
 // publishRefsRecord writes org.tangled.git.refs (rkey 'self') with the
 // repo's current refs in git show-ref format.
 func (k *Knot) publishRefsRecord(acc *repoAccount, editor string) {
-	repo := gitrepo.Repo{Be: k.storeBackend()}
+	repo := gitrepo.Repo{Be: k.storeBackend(), RefPrefix: "git/" + acc.Did + "/"}
 	branches, err := repo.Branches()
 	if err != nil {
 		return
