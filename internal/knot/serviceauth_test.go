@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestServiceAuthRecordWriteOverHTTP(t *testing.T) {
 	multibase := "z" + atauth.Base58Encode(priv.PubKey().SerializeCompressed())
 	issuer := "did:plc:agent-1"
 
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite", filepath.ToSlash(filepath.Join(t.TempDir(), "test.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,8 @@
   <aside class="sidebar">
     <h3>repos</h3>
     <div class="repolist" id="repos"></div>
+    <h3 style="margin-top:22px">fleet</h3>
+    <div id="runs" class="runlist"><div class="empty">—</div></div>
     <h3 style="margin-top:22px">new repo</h3>
     <div class="newform" style="flex-direction:column">
       <input type="text" id="new-repo" placeholder="name" style="width:100%">
@@ -30,6 +32,8 @@
       <span class="did mono dim" id="repo-did"></span>
     </div>
     <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
+    <h3 class="prophead mono dim">proposals & verdicts</h3>
+    <div class="ticketlist" id="proposals"></div>
     <div class="newform" id="ticket-form" style="display:none">
       <input type="text" id="new-ticket" placeholder="describe the work — one line, one task" style="flex:1">
       <button id="create-ticket">open ticket</button>
@@ -57,6 +61,22 @@ async function xrpc(method, path, body) {
   return json;
 }
 
+async function loadRuns() {
+  try {
+    const out = await xrpc('GET', '/org.tangled.fleet.runs' + (current ? '?repo=' + encodeURIComponent(current.did) : ''));
+    const runs = out.runs || [];
+    $('runs').replaceChildren(...(runs.length ? runs.map(r => {
+      const el = document.createElement('div');
+      el.className = 'run';
+      const st = document.createElement('span');
+      st.className = 'st ' + r.status; st.textContent = r.status;
+      el.appendChild(st);
+      el.appendChild(document.createTextNode(' ' + r.title.slice(0, 34)));
+      return el;
+    }) : [Object.assign(document.createElement('div'), { className: 'empty', textContent: 'no runs yet' })]));
+  } catch (e) { /* runs panel is best-effort */ }
+}
+
 async function loadRepos() {
   try {
     const out = await xrpc('GET', '/org.tangled.repo.listRepos');
@@ -79,9 +99,11 @@ async function openRepo(r) {
   $('ticket-form').style.display = 'flex';
   flash('');
   loadRepos();
+  loadRuns();
   try {
     const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(r.did)}&collection=org.tangled.track.ticket&limit=50`);
     const records = out.records || [];
+    const proposals = records.filter(rec => (rec.value || {}).targetBranch);
     $('tickets').replaceChildren(...(records.length ? records.map(rec => {
       const v = rec.value || {};
       const title = (v.title && v.title.text) || '(untitled)';
@@ -90,13 +112,48 @@ async function openRepo(r) {
       const state = v.targetBranch ? 'pull' : (v.state || 'open');
       el.innerHTML = `<span class="st ${state}">${state}</span>
         <div><div class="tt"></div>
-        <div class="meta mono">${r.name} · ${(rec.uri || '').split('/').pop()}${v.targetBranch ? ' → ' + v.targetBranch : ''}</div></div>`;
+        <div class="meta mono">${r.name} · ${(rec.uri || '').split('/').pop()}${v.targetBranch ? ' → ' + v.targetBranch.slice(0, 8) : ''}</div></div>`;
       el.querySelector('.tt').textContent = title;
       return el;
     }) : [Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No tickets. Open the first one below.' })]));
+    // proposals & verdicts: comments whose subject is a proposal ticket
+    renderProposals(r, proposals);
   } catch (e) {
     $('tickets').replaceChildren(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'listRecords: ' + e.message }));
   }
+}
+
+async function renderProposals(repo, proposals) {
+  const box = $('proposals');
+  if (!proposals.length) {
+    box.replaceChildren(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No proposals yet.' }));
+    return;
+  }
+  let comments = [];
+  try {
+    const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(repo.did)}&collection=org.tangled.feed.comment&limit=100`);
+    comments = out.records || [];
+  } catch (e) { /* none */ }
+  box.replaceChildren(...proposals.map(rec => {
+    const v = rec.value || {};
+    const rkey = (rec.uri || '').split('/').pop();
+    const el = document.createElement('div');
+    el.className = 'ticket';
+    const title = (v.title && v.title.text) || '(untitled)';
+    const verdict = comments.find(c => {
+      const subj = (c.value || {}).subject || {};
+      return subj.uri && subj.uri.endsWith('/' + rkey);
+    });
+    el.innerHTML = `<span class="st pull">proposal</span>
+      <div style="min-width:0"><div class="tt"></div>
+      <div class="meta mono">${v.targetBranch || ''}</div>
+      ${verdict ? `<div class="verdict"><span class="who">machine review</span><br><span class="vt"></span></div>` : ''}</div>`;
+    el.querySelector('.tt').textContent = title;
+    if (verdict) {
+      el.querySelector('.vt').textContent = ((verdict.value || {}).body || {}).text || '';
+    }
+    return el;
+  }));
 }
 
 $('create-repo').onclick = async () => {

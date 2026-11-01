@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 // contract wrangler dev taught us in the live smoke.
 
 func TestKnotStateSurvivesIsolateRestart(t *testing.T) {
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite", filepath.ToSlash(filepath.Join(t.TempDir(), "test.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

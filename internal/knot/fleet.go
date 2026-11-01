@@ -24,6 +24,7 @@ func (k *Knot) fleetRoutes() {
 	k.mux.HandleFunc("POST /xrpc/org.tangled.fleet.runDone", k.handleRunDone)
 	k.mux.HandleFunc("POST /xrpc/org.tangled.review.submitPatch", k.handleSubmitPatch)
 	k.mux.HandleFunc("GET /xrpc/org.tangled.fleet.nextRun", k.handleNextRun)
+	k.mux.HandleFunc("GET /xrpc/org.tangled.fleet.runs", k.handleRuns)
 }
 
 // tick is the orchestrator: assign + start one run per repo with an open
@@ -208,6 +209,10 @@ func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string)
 	if err != nil {
 		return
 	}
+	// machine review: verdict comment before a human looks
+	k.reviewAsync(repo,
+		fmt.Sprintf("at://%s/org.tangled.track.ticket/%s", repo, w.Rkey),
+		w.CID, base, head, todoTitle)
 	patch := map[string]any{
 		"$type":     "org.tangled.review.patch",
 		"ticket":    w.Rkey,
@@ -272,4 +277,42 @@ func (k *Knot) TickInternal() {
 	k.opt.CronInternal = true
 	defer func() { k.opt.CronInternal = false }()
 	_ = k.tick()
+}
+
+// handleRuns lists a repo's runs (public read; the console deck).
+func (k *Knot) handleRuns(w http.ResponseWriter, r *http.Request) {
+	if k.opt.DB == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"runs": []any{}})
+		return
+	}
+	repo := r.URL.Query().Get("repo")
+	rows, err := k.opt.DB.Query(
+		`SELECT id, branch, todo_title, status, summary, created_at, ended_at
+		 FROM knot_runs WHERE repo = ? ORDER BY created_at DESC LIMIT 50`, repo)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	type runView struct {
+		ID, Branch, Title, Status, Summary, CreatedAt, EndedAt string
+	}
+	type jview struct {
+		ID        string `json:"id"`
+		Branch    string `json:"branch"`
+		Title     string `json:"title"`
+		Status    string `json:"status"`
+		Summary   string `json:"summary"`
+		CreatedAt string `json:"createdAt"`
+		EndedAt   string `json:"endedAt"`
+	}
+	out := []jview{}
+	for rows.Next() {
+		var v runView
+		if err := rows.Scan(&v.ID, &v.Branch, &v.Title, &v.Status, &v.Summary, &v.CreatedAt, &v.EndedAt); err != nil {
+			continue
+		}
+		out = append(out, jview(v))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
 }

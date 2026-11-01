@@ -29,7 +29,7 @@ func TestFleetGoAgentEndToEnd(t *testing.T) {
 		t.Skip("git not installed")
 	}
 	key, _ := btcec.NewPrivateKey()
-	db, _ := sql.Open("sqlite", "file::memory:?cache=shared")
+	db, _ := sql.Open("sqlite", filepath.ToSlash(filepath.Join(t.TempDir(), "test.db")))
 	if err := cob.Migrate(db); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestFleetGoAgentEndToEnd(t *testing.T) {
 	if err := db.QueryRow(`SELECT branch FROM knot_runs LIMIT 1`).Scan(&branch); err != nil || branch == "" {
 		t.Fatalf("no run branch: %v", err)
 	}
-	branchHead, ok, _ := h.be.RefHead("refs/heads/" + branch)
+	branchHead, ok, _ := h.be.RefHead("git/did:web:forgesi.org:repo:goagent/refs/heads/" + branch)
 	if !ok {
 		t.Fatalf("branch %s missing", branch)
 	}

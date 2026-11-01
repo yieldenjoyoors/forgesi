@@ -2,6 +2,7 @@ package cob
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	_ "github.com/glebarez/go-sqlite"
@@ -13,7 +14,7 @@ import (
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite", filepath.ToSlash(filepath.Join(t.TempDir(), "test.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

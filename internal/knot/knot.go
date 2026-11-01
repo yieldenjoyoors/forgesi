@@ -41,6 +41,8 @@ type Options struct {
 	CronInternal bool
 	// RunnerKey authenticates fleet runners on nextRun/runDone (pull mode).
 	RunnerKey string
+	// ReviewLLM is the machine reviewer's model client (nil = no review).
+	ReviewLLM func(system, user string) (string, error)
 }
 
 // Knot serves the wire surface. Storage bindings attach in M2/M3; M1 is the

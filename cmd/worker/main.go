@@ -24,6 +24,7 @@ import (
 
 	"github.com/yieldenjoyoors/forgesi/internal/atauth"
 	"github.com/yieldenjoyoors/forgesi/internal/knot"
+	"github.com/yieldenjoyoors/forgesi/internal/llm"
 )
 
 // httpRuntime is the fetch-backed client for outbound calls in wasm.
@@ -43,6 +44,11 @@ func main() {
 		auth = knot.ServiceAuth{V: &atauth.Verifier{ResolveDID: resolveDID, Now: time.Now}}
 	}
 	mintKey := loadMintKey()
+	var reviewLLM func(system, user string) (string, error)
+	if acct, tok := cloudflare.Getenv("CF_ACCOUNT_ID"), cloudflare.Getenv("CLOUDFLARE_API_TOKEN"); acct != "" && tok != "" {
+		client := &llm.Client{AccountID: acct, Token: tok}
+		reviewLLM = client.Complete
+	}
 	knotHandler := knot.New(knot.Options{
 		Host:      strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
 		Version:   envOr("KNOT_VERSION", "0.1.0"),
@@ -50,6 +56,7 @@ func main() {
 		DB:        db,
 		MintKey:   mintKey,
 		RunnerKey: cloudflare.Getenv("KNOT_RUNNER_KEY"),
+		ReviewLLM: reviewLLM,
 	})
 	workers.Serve(knotHandler)
 	// The orchestrator heartbeat: cron-triggered (wrangler.jsonc triggers)
