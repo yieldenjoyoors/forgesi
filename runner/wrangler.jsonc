@@ -6,7 +6,6 @@
   "name": "forgesi-runner",
   "main": "worker.ts",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["cloudflare:containers"],
 
   "containers": [
     {
@@ -17,9 +16,9 @@
     }
   ],
 
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["FleetAgent"] }
-  ],
+  "exports": {
+    "FleetAgent": { "type": "durable-object", "storage": "sqlite" }
+  },
 
   "durable_objects": {
     "bindings": [{ "name": "FLEET_AGENT_DO", "class_name": "FleetAgent" }]
