@@ -36,13 +36,13 @@ jobs:
           WRANGLER_LOG: debug
         run: |
           set -o pipefail
-          npx -y wrangler@4.156.0 deploy --verbose 2>&1 | tee deploy.log
-          status=$?
+          status=0
+          npx -y wrangler@4.156.0 deploy --verbose 2>&1 | tee deploy.log || status=$?
           if [ "$status" -ne 0 ]; then
             {
               echo "### wrangler deploy output (tail)"
               echo '```'
-              tail -60 deploy.log
+              tail -80 deploy.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
