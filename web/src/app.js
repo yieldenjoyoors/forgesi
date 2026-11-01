@@ -11,13 +11,31 @@ import {
 	deleteStoredSession,
 	OAuthUserAgent,
 } from '@atcute/oauth-browser-client';
-import { CompositeDidDocumentResolver, PlcDidDocumentResolver, WebDidDocumentResolver, XrpcHandleResolver } from '@atcute/identity-resolver';
+import {
+	CompositeDidDocumentResolver,
+	LocalActorResolver,
+	PlcDidDocumentResolver,
+	WebDidDocumentResolver,
+	XrpcDidDocumentResolver,
+	XrpcHandleResolver,
+} from '@atcute/identity-resolver';
 
 const KNOT_DID = 'did:web:forgesi.org';
-const SCOPE = 'atproto repo:org.tangled.* rpc:com.atproto.server.getServiceAuth?aud=* rpc:com.atproto.repo.createRecord?aud=* rpc:com.atproto.repo.putRecord?aud=* rpc:com.atproto.repo.deleteRecord?aud=* rpc:org.tangled.review.submitPatch?aud=* rpc:org.tangled.repo.mintToken?aud=* rpc:org.tangled.git.receivePack?aud=* rpc:com.atproto.server.getServiceAuth?aud=*'.replace('com.atcode', 'com.atproto');
+const SCOPE = 'atproto repo:org.tangled.* rpc:com.atproto.server.getServiceAuth?aud=* rpc:com.atproto.repo.createRecord?aud=* rpc:com.atproto.repo.putRecord?aud=* rpc:com.atproto.repo.deleteRecord?aud=* rpc:org.tangled.review.submitPatch?aud=* rpc:org.tangled.repo.mintToken?aud=* rpc:org.tangled.git.receivePack?aud=* rpc:com.atproto.server.getServiceAuth?aud=*';
 
 let agent = null; // OAuthUserAgent when signed in
 let agentDID = null;
+
+const didDocumentResolver = new CompositeDidDocumentResolver({
+	methods: {
+		plc: new PlcDidDocumentResolver(),
+		web: new WebDidDocumentResolver(),
+		xrpc: new XrpcDidDocumentResolver({ serviceUrl: 'https://public.api.bsky.app' }),
+	},
+});
+// Browser-side resolution: XRPC resolvers (bsky AppView + plc.directory)
+// send CORS headers; raw DoH/well-known fetches to arbitrary hosts don't.
+const handleResolver = new XrpcHandleResolver({ serviceUrl: 'https://public.api.bsky.app' });
 
 const $ = (id) => document.getElementById(id);
 let repos = [], current = null;
@@ -38,11 +56,9 @@ function ensureOAuth() {
 			client_id: 'https://forgesi.org/oauth/client-metadata.json',
 			redirect_uri: 'https://forgesi.org/oauth/callback/',
 		},
-		identityResolver: new CompositeDidDocumentResolver({
-			methods: {
-				plc: new PlcDidDocumentResolver(),
-				web: new WebDidDocumentResolver(),
-			},
+		identityResolver: new LocalActorResolver({
+			handleResolver,
+			didDocumentResolver,
 		}),
 	});
 	oauthReady = true;
