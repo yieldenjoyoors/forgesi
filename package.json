@@ -1,0 +1,16 @@
+{
+  "name": "forgesi",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build:web": "esbuild web/src/app.js --bundle --outfile=web/app.js --format=esm --minify --target=es2022"
+  },
+  "dependencies": {
+    "@atcute/client": "^5.1.2",
+    "@atcute/identity-resolver": "^2.0.3",
+    "@atcute/oauth-browser-client": "^5.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

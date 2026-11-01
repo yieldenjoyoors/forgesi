@@ -1,0 +1,13 @@
+{
+  "client_id": "https://forgesi.org/oauth/client-metadata.json",
+  "client_name": "ForgeSI Console",
+  "client_uri": "https://forgesi.org",
+  "logo_uri": "https://forgesi.org/favicon.svg",
+  "redirect_uris": ["https://forgesi.org/oauth/callback/"],
+  "scope": "atproto repo:org.tangled.* rpc:com.atproto.server.getServiceAuth?aud=* rpc:com.atproto.repo.createRecord?aud=* rpc:com.atproto.repo.putRecord?aud=* rpc:com.atproto.repo.deleteRecord?aud=* rpc:org.tangled.review.submitPatch?aud=* rpc:org.tangled.repo.mintToken?aud=* rpc:org.tangled.git.receivePack?aud=*",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "dpop_bound_access_tokens": true
+}

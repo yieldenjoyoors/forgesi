@@ -70,6 +70,7 @@ footer {
 }
 
 /* ---------- console shell ---------- */
+.ok-flash { color: var(--good); }
 .appbar {
   display: flex; align-items: center; gap: 14px;
   padding: 14px clamp(16px, 4vw, 40px); border-bottom: 1px solid var(--line);

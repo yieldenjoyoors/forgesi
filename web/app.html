@@ -11,6 +11,11 @@
 <header class="appbar">
   <a class="brand" href="/"><img src="/favicon.svg" alt="" width="22" height="22"><span>Forge<b>SI</b></span></a>
   <span class="crumb">console · <b id="crumb-repo">repos</b></span>
+  <span class="mono" id="identity" style="margin-left:auto;font-size:11.5px"></span>
+  <form id="signin" style="display:flex;gap:6px;margin-left:8px">
+    <input type="text" id="handle" placeholder="you.bsky.social" style="width:180px">
+    <button type="submit">sign in</button>
+  </form>
 </header>
 
 <div class="appmain">
@@ -32,7 +37,7 @@
       <span class="did mono dim" id="repo-did"></span>
     </div>
     <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
-    <h3 class="prophead mono dim">proposals & verdicts</h3>
+    <h3 class="prophead mono dim">proposals &amp; verdicts</h3>
     <div class="ticketlist" id="proposals"></div>
     <div class="newform" id="ticket-form" style="display:none">
       <input type="text" id="new-ticket" placeholder="describe the work — one line, one task" style="flex:1">
@@ -42,153 +47,6 @@
   </main>
 </div>
 
-<script>
-// The console shell consumes the knot's own XRPC surface — the same wire any
-// Tangled client speaks. Writes carry a bearer (dev authorizer locally;
-// service-auth JWTs when the ES256K verifier lands).
-const $ = (id) => document.getElementById(id);
-let repos = [], current = null;
-
-const flash = (msg, cls) => { const f = $('flash'); f.textContent = msg || ''; f.className = 'flash ' + (cls || ''); };
-
-async function xrpc(method, path, body) {
-  const opts = { method, headers: {} };
-  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  if (method !== 'GET') opts.headers['Authorization'] = 'Bearer ' + (localStorage.getItem('knot-token') || 'dev');
-  const res = await fetch('/xrpc' + path, opts);
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(json.message || json.error || res.status), { json, status: res.status });
-  return json;
-}
-
-async function loadRuns() {
-  try {
-    const out = await xrpc('GET', '/org.tangled.fleet.runs' + (current ? '?repo=' + encodeURIComponent(current.did) : ''));
-    const runs = out.runs || [];
-    $('runs').replaceChildren(...(runs.length ? runs.map(r => {
-      const el = document.createElement('div');
-      el.className = 'run';
-      const st = document.createElement('span');
-      st.className = 'st ' + r.status; st.textContent = r.status;
-      el.appendChild(st);
-      el.appendChild(document.createTextNode(' ' + r.title.slice(0, 34)));
-      return el;
-    }) : [Object.assign(document.createElement('div'), { className: 'empty', textContent: 'no runs yet' })]));
-  } catch (e) { /* runs panel is best-effort */ }
-}
-
-async function loadRepos() {
-  try {
-    const out = await xrpc('GET', '/org.tangled.repo.listRepos');
-    repos = out.repos || [];
-    $('repos').replaceChildren(...repos.map(r => {
-      const el = document.createElement('div');
-      el.className = 'repoitem' + (current && current.did === r.did ? ' on' : '');
-      el.textContent = r.name;
-      el.onclick = () => openRepo(r);
-      return el;
-    }));
-  } catch (e) { flash('listRepos: ' + e.message, 'err'); }
-}
-
-async function openRepo(r) {
-  current = r;
-  $('crumb-repo').textContent = r.name;
-  $('repo-title').textContent = r.name;
-  $('repo-did').textContent = r.did;
-  $('ticket-form').style.display = 'flex';
-  flash('');
-  loadRepos();
-  loadRuns();
-  try {
-    const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(r.did)}&collection=org.tangled.track.ticket&limit=50`);
-    const records = out.records || [];
-    const proposals = records.filter(rec => (rec.value || {}).targetBranch);
-    $('tickets').replaceChildren(...(records.length ? records.map(rec => {
-      const v = rec.value || {};
-      const title = (v.title && v.title.text) || '(untitled)';
-      const el = document.createElement('div');
-      el.className = 'ticket';
-      const state = v.targetBranch ? 'pull' : (v.state || 'open');
-      el.innerHTML = `<span class="st ${state}">${state}</span>
-        <div><div class="tt"></div>
-        <div class="meta mono">${r.name} · ${(rec.uri || '').split('/').pop()}${v.targetBranch ? ' → ' + v.targetBranch.slice(0, 8) : ''}</div></div>`;
-      el.querySelector('.tt').textContent = title;
-      return el;
-    }) : [Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No tickets. Open the first one below.' })]));
-    // proposals & verdicts: comments whose subject is a proposal ticket
-    renderProposals(r, proposals);
-  } catch (e) {
-    $('tickets').replaceChildren(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'listRecords: ' + e.message }));
-  }
-}
-
-async function renderProposals(repo, proposals) {
-  const box = $('proposals');
-  if (!proposals.length) {
-    box.replaceChildren(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No proposals yet.' }));
-    return;
-  }
-  let comments = [];
-  try {
-    const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(repo.did)}&collection=org.tangled.feed.comment&limit=100`);
-    comments = out.records || [];
-  } catch (e) { /* none */ }
-  box.replaceChildren(...proposals.map(rec => {
-    const v = rec.value || {};
-    const rkey = (rec.uri || '').split('/').pop();
-    const el = document.createElement('div');
-    el.className = 'ticket';
-    const title = (v.title && v.title.text) || '(untitled)';
-    const verdict = comments.find(c => {
-      const subj = (c.value || {}).subject || {};
-      return subj.uri && subj.uri.endsWith('/' + rkey);
-    });
-    el.innerHTML = `<span class="st pull">proposal</span>
-      <div style="min-width:0"><div class="tt"></div>
-      <div class="meta mono">${v.targetBranch || ''}</div>
-      ${verdict ? `<div class="verdict"><span class="who">machine review</span><br><span class="vt"></span></div>` : ''}</div>`;
-    el.querySelector('.tt').textContent = title;
-    if (verdict) {
-      el.querySelector('.vt').textContent = ((verdict.value || {}).body || {}).text || '';
-    }
-    return el;
-  }));
-}
-
-$('create-repo').onclick = async () => {
-  const name = $('new-repo').value.trim();
-  if (!name) return;
-  try {
-    const out = await xrpc('POST', '/org.tangled.repo.createRepo', { name, defaultBranch: 'main' });
-    $('new-repo').value = '';
-    flash('repo created: ' + out.did, 'ok');
-    await loadRepos();
-    openRepo(repos.find(r => r.did === out.did) || { did: out.did, name });
-  } catch (e) { flash(e.message, 'err'); }
-};
-
-$('create-ticket').onclick = async () => {
-  const text = $('new-ticket').value.trim();
-  if (!text || !current) return;
-  try {
-    await xrpc('POST', '/com.atproto.repo.createRecord', {
-      repo: current.did,
-      collection: 'org.tangled.track.ticket',
-      record: {
-        $type: 'org.tangled.track.ticket',
-        title: { $type: 'org.tangled.markup.markdown#inline', text },
-        state: 'open',
-        createdAt: new Date().toISOString(),
-      },
-    });
-    $('new-ticket').value = '';
-    flash('ticket opened', 'ok');
-    openRepo(current);
-  } catch (e) { flash(e.message, 'err'); }
-};
-
-loadRepos();
-</script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>
