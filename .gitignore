@@ -1,4 +1,4 @@
-dist-gen/
+/dist-gen/
 node_modules/
 .wrangler/
 .dev.vars

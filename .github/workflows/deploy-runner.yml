@@ -1,7 +1,7 @@
 name: deploy-runner
-# The fleet container: builds the Go agent binary and the runner image,
-# then deploys the container app. Runs on push to main (docker is only
-# available on GitHub runners — local wrangler cannot build images).
+# The fleet runner: the agent library compiled to wasm and deployed as a
+# plain Worker (no containers — the agent is pure Go over HTTP: it
+# clones via the knot's smart-HTTP, works with the LLM, pushes, reports).
 on:
   push:
     branches: [main]
@@ -20,33 +20,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build the agent binary (linux)
-        run: |
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
-            -o runner/agent ./runner/agent
+      - name: Install workers-assets-gen
+        run: go install github.com/syumai/workers/assets-generator/cmd/workers-assets-gen@a38be30753a4
 
-      - name: Build and push the container image
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          IMAGE: registry.cloudflare.com/96f35316d0a27c2ce00f8aa66e5c7f15/forgesi-runner-fleetagent:latest
+      - name: Build the runner Worker (wasm)
+        working-directory: runner
         run: |
-          docker build -t "$IMAGE" runner/ || { echo "::error::docker build failed"; docker build -t "$IMAGE" runner/ 2>&1 | tail -25; exit 1; }
-          npx -y wrangler@4.156.0 containers push "$IMAGE" || { echo "::error::registry push failed"; exit 1; }
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          workers-assets-gen -mode=go -o dist-gen
+          GOOS=js GOARCH=wasm go build -trimpath -o dist-gen/app.wasm ./cmd/worker
 
-      - name: Deploy the runner container app
+      - name: Deploy the runner Worker
         working-directory: runner
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          KNOT: https://forgesi.org
-          LLM_KEY: ${{ secrets.GLM_API_KEY }}
           KNOT_RUNNER_KEY: ${{ secrets.KNOT_RUNNER_KEY }}
-          WRANGLER_LOG: debug
-          WRANGLER_LOG_SANITIZE: "false"
+          LLM_KEY: ${{ secrets.GLM_API_KEY }}
         run: |
-          set -o pipefail
           status=0
-          npx -y wrangler@4.156.0 deploy --var KNOT_RUNNER_KEY:$KNOT_RUNNER_KEY 2>&1 | tee deploy.log || status=$?
+          npx -y wrangler@4.156.0 deploy --var KNOT_RUNNER_KEY:$KNOT_RUNNER_KEY --var RUNNER_KEY:$KNOT_RUNNER_KEY --var LLM_KEY:$LLM_KEY 2>&1 | tee deploy.log || status=$?
           if [ "$status" -ne 0 ]; then
             {
               echo "### wrangler deploy output (tail)"

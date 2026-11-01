@@ -3,7 +3,7 @@
 // the branch, report done. Pure Go — the fleet container is a static
 // binary in a scratch image; no interpreter, no git binary (this binary
 // speaks the git wire protocol itself via internal/packfile).
-package main
+package agent
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yieldenjoyoors/forgesi/internal/gitrepo"
@@ -29,12 +30,34 @@ var (
 	llmModel  = env("LLM_MODEL", "glm-4.7")
 )
 
+// httpClient is the outbound client; the wasm build swaps it for the
+// workers fetch-backed transport (runtime_wasm.go).
+var httpClient = http.DefaultClient
+
+// getEnv is per-build (os.Getenv on the CLI, worker bindings in wasm);
+// the runtime files assign it in init.
+var getEnv func(string) string
+
 func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
+	if v := getEnv(k); v != "" {
 		return v
 	}
 	return d
 }
+
+// initConfig resolves the configuration lazily — the wasm build can only
+// read worker bindings once the runtime is up, not during package var init.
+func initConfig() {
+	knot = env("KNOT", knot)
+	runnerKey = getEnv("RUNNER_KEY")
+	llmURL = env("LLM_URL", llmURL)
+	llmKey = getEnv("LLM_KEY")
+	llmModel = env("LLM_MODEL", llmModel)
+}
+
+var configOnce sync.Once
+
+func ensureConfig() { configOnce.Do(initConfig) }
 
 func log(a ...any) { fmt.Fprintln(os.Stderr, a...) }
 
@@ -60,12 +83,21 @@ func (m *memBackend) ListRefs(prefix, after string, limit int) ([]string, error)
 	return nil, nil
 }
 
-type runRequest struct {
+// RunRequest is one fleet run's payload.
+type RunRequest struct {
 	RunID     string `json:"runId"`
 	Repo      string `json:"repo"`
 	Branch    string `json:"branch"`
 	TodoTitle string `json:"todoTitle"`
 	Token     string `json:"token"`
+}
+
+// postForm is xrpc for the git wire: POST a framed body, return the raw
+// response (no JSON decoding).
+func postForm(url string, body io.Reader) (*http.Response, error) {
+	req, _ := http.NewRequest(http.MethodPost, url, body)
+	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+	return httpClient.Do(req)
 }
 
 func xrpc(method, path string, body any, token string, out any) error {
@@ -79,7 +111,7 @@ func xrpc(method, path string, body any, token string, out any) error {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -107,7 +139,7 @@ func clone(repo string) (gitrepo.Repo, string, map[string][]byte, error) {
 	cmd.Write(packline.DelimPkt())
 	cmd.Write(packline.Pkt("symrefs\n"))
 	cmd.Write(packline.FlushPkt())
-	res, err := http.Post(base+"/git-upload-pack", "application/x-git-upload-pack-request", &cmd)
+	res, err := postForm(base+"/git-upload-pack", &cmd)
 	if err != nil {
 		return gr, "", nil, err
 	}
@@ -128,7 +160,7 @@ func clone(repo string) (gitrepo.Repo, string, map[string][]byte, error) {
 	req.Write(packline.Pkt("want " + head + "\n"))
 	req.Write(packline.Pkt("done\n"))
 	req.Write(packline.FlushPkt())
-	res2, err := http.Post(base+"/git-upload-pack", "application/x-git-upload-pack-request", &req)
+	res2, err := postForm(base+"/git-upload-pack", &req)
 	if err != nil {
 		return gr, "", nil, err
 	}
@@ -223,7 +255,7 @@ func push(repo, branch, newCommit, token string, gr gitrepo.Repo) error {
 	req, _ := http.NewRequest(http.MethodPost, knot+"/"+repo+"/git-receive-pack", &body)
 	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
 	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -251,7 +283,7 @@ func chat(prompt string) (done bool, summary string, files map[string][]byte, er
 	req, _ := http.NewRequest(http.MethodPost, llmURL, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+llmKey)
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpClient.Do(req)
 	if err != nil {
 		return false, "", nil, err
 	}
@@ -302,25 +334,10 @@ func min(a, b int) int {
 	return b
 }
 
-func main() {
-	if os.Getenv("RUN_MODE") == "serve" {
-		serve()
-		return
-	}
-	// pull mode: fetch the next queued run and execute it
-	var run runRequest
-	if err := xrpc(http.MethodGet, "/xrpc/org.tangled.fleet.nextRun", nil, runnerKey, &run); err != nil {
-		log("no run:", err)
-		os.Exit(0)
-	}
-	runOne(run)
-}
-
-// serve is the container entrypoint: Cloudflare Containers drive the app
-// over HTTP; each POST /run executes one agent loop asynchronously.
-func serve() {
+// (main and serve moved to runner/cmd/agent and runner/cmd/worker)
+func startServe() {
 	http.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
-		var run runRequest
+		var run RunRequest
 		if err := json.NewDecoder(r.Body).Decode(&run); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -329,7 +346,7 @@ func serve() {
 			defer func() {
 				if rec := recover(); rec != nil {
 					log("run panicked:", rec)
-					report(run.RunID, "failed", fmt.Sprintf("panic: %v", rec), "", "", "")
+					Report(run.RunID, "failed", fmt.Sprintf("panic: %v", rec), "", "", "")
 				}
 			}()
 			runOne(run)
@@ -345,12 +362,35 @@ func serve() {
 }
 
 // runOne executes a single run end-to-end.
-func runOne(run runRequest) {
+// Run executes one run end-to-end (the wasm worker entry).
+func Run(req RunRequest) {
+	ensureConfig()
+	runOne(req)
+}
+
+// Pull is the CLI pull mode: fetch the next queued run and execute it.
+func Pull() {
+	ensureConfig()
+	var run RunRequest
+	if err := xrpc(http.MethodGet, "/xrpc/org.tangled.fleet.nextRun", nil, runnerKey, &run); err != nil {
+		log("no run:", err)
+		os.Exit(0)
+	}
+	runOne(run)
+}
+
+// Serve is the serve mode: HTTP entries for the runner worker.
+func Serve() {
+	ensureConfig()
+	startServe()
+}
+
+func runOne(run RunRequest) {
 	log("run", run.RunID, run.Repo, "branch", run.Branch, "-", run.TodoTitle)
 
 	gr, base, files, err := clone(run.Repo)
 	if err != nil {
-		report(run.RunID, "failed", "clone: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "clone: "+err.Error(), "", "", "")
 		return
 	}
 	log("cloned", len(files), "files at", base[:min(8, len(base))])
@@ -371,7 +411,7 @@ func runOne(run runRequest) {
 	for step := 0; step < 5; step++ {
 		done, summary, files, err = chat(prompt)
 		if err != nil {
-			report(run.RunID, "failed", "llm: "+err.Error(), "", "", "")
+			Report(run.RunID, "failed", "llm: "+err.Error(), "", "", "")
 			return
 		}
 		for p, c := range files {
@@ -383,14 +423,14 @@ func runOne(run runRequest) {
 		prompt = "Continue the task. Reply with the JSON described."
 	}
 	if len(files) == 0 {
-		report(run.RunID, "failed", "agent produced no changes", "", "", "")
+		Report(run.RunID, "failed", "agent produced no changes", "", "", "")
 		return
 	}
 
 	// build the new tree+commit natively
 	treeOID, err := gr.WriteTreeFromFiles(merged)
 	if err != nil {
-		report(run.RunID, "failed", "tree: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "tree: "+err.Error(), "", "", "")
 		return
 	}
 	commitContent := gitrepo.EncodeCommit(gitrepo.CommitSpec{
@@ -400,18 +440,19 @@ func runOne(run runRequest) {
 	})
 	newCommit, err := gr.StoreObject("commit", commitContent)
 	if err != nil {
-		report(run.RunID, "failed", "commit: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "commit: "+err.Error(), "", "", "")
 		return
 	}
 	if err := push(run.Repo, run.Branch, newCommit, run.Token, gr); err != nil {
-		report(run.RunID, "failed", "push: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "push: "+err.Error(), "", "", "")
 		return
 	}
 	log("pushed", newCommit[:min(8, len(newCommit))])
-	report(run.RunID, "done", summary, run.Branch, base, newCommit)
+	Report(run.RunID, "done", summary, run.Branch, base, newCommit)
 }
 
-func report(runID, status, summary, branch, base, head string) {
+// Report is the run callback to the knot (exported for the worker entry).
+func Report(runID, status, summary, branch, base, head string) {
 	if status != "done" {
 		log("run failed:", summary)
 	}
