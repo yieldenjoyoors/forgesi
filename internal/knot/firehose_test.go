@@ -60,8 +60,9 @@ func TestFirehoseEventsAndDIDDocs(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Events) != 1 {
-		t.Fatalf("events = %d, want 1", len(out.Events))
+	// createRepo emits its own event + the manifest record (2)
+	if len(out.Events) != 2 {
+		t.Fatalf("events = %d, want 2", len(out.Events))
 	}
 	if out.Events[0].Repo != "did:web:forgesi.org:repo:fh" {
 		t.Errorf("repo = %s", out.Events[0].Repo)
@@ -105,6 +106,7 @@ func TestFirehoseEventsAndDIDDocs(t *testing.T) {
 		t.Fatalf("repo did doc: %d %s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), `"TangledKnot"`) ||
+		!strings.Contains(w.Body.String(), `"AtprotoPersonalDataServer"`) ||
 		!strings.Contains(w.Body.String(), "did:web:forgesi.org:repo:fh") {
 		t.Errorf("did doc body = %s", w.Body.String())
 	}

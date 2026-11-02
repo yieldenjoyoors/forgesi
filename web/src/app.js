@@ -683,7 +683,7 @@ if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () 
 	if (!name) return;
 	try {
 		await requireSession('sign in to create a repo');
-		const out = await knotFetch('POST', '/org.tangled.repo.createRepo', { name, defaultBranch: 'main' }, KNOT_DID, 'org.tangled.repo.createRepo');
+		const out = await knotFetch('POST', '/org.tangled.repo.createRepo', { name, defaultBranch: 'main', owner: agentDID || undefined }, KNOT_DID, 'org.tangled.repo.createRepo');
 		$('new-repo').value = '';
 		$('new-repo-row').style.display = 'none';
 		log('repo created: ' + out.did, 'ok');

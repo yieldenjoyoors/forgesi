@@ -50,11 +50,20 @@ func (k *Knot) handleRepoDidDoc(w http.ResponseWriter, r *http.Request) {
 	doc := map[string]any{
 		"@context": "https://www.w3.org/ns/did/v1",
 		"id":       did,
-		"service": []any{map[string]any{
-			"id":              did + "#tangled_knot",
-			"type":            "TangledKnot",
-			"serviceEndpoint": k.origin(),
-		}},
+		"service": []any{
+			map[string]any{
+				"id":              did + "#tangled_knot",
+				"type":            "TangledKnot",
+				"serviceEndpoint": k.origin(),
+			},
+			// the knot is the repo's PDS: its records (issues, pulls,
+			// comments, manifest) live here, keyed on the repo DID.
+			map[string]any{
+				"id":              did + "#atproto_pds",
+				"type":            "AtprotoPersonalDataServer",
+				"serviceEndpoint": k.origin(),
+			},
+		},
 	}
 	if k.opt.MintKey != nil {
 		doc["verificationMethod"] = []any{map[string]any{

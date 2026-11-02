@@ -242,6 +242,7 @@ func (k *Knot) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string `json:"name"`
 		DefaultBranch string `json:"defaultBranch"`
+		Owner         string `json:"owner"` // the creating user's DID, when known
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "InvalidRequest", err.Error())
@@ -258,6 +259,22 @@ func (k *Knot) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	if !k.registry.create(did, body.Name, body.DefaultBranch) {
 		writeErr(w, http.StatusConflict, "InvalidSwap", "repo already exists")
 		return
+	}
+	// the ownership half of the discovery claim: manifest/self on the repo
+	// account, declaration {owner, name}. The matching declaration on the
+	// owner's PDS is what makes the repo visible under owner/slug on
+	// tangled.org — until that lands the repo is knot-visible only.
+	owner := body.Owner
+	if owner == "" {
+		owner = k.selfDID()
+	}
+	manifest := map[string]any{
+		"$type":       "org.tangled.repo.manifest",
+		"declaration": map[string]any{"owner": owner, "name": body.Name},
+		"createdAt":   time.Now().UTC().Format(time.RFC3339),
+	}
+	if w2, err := k.store.Create(did, "org.tangled.repo.manifest", "self", manifest, k.selfDID()); err == nil {
+		k.emit(did, "commit", "org.tangled.repo.manifest", w2.Rkey, w2.CID, w2.Change, manifest)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"did": did, "key": k.opt.PublicKeyMultibase})
 }

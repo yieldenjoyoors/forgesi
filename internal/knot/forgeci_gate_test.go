@@ -243,6 +243,32 @@ func TestListFiles(t *testing.T) {
 	}
 }
 
+// createRepo writes org.tangled.repo.manifest/self — the knot-side half
+// of the discovery claim (the owner's PDS carries the other half).
+func TestCreateRepoWritesManifest(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:manifest"
+	owner := "did:web:alice.example"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q,"owner":%q}`, "manifest", owner); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/com.atproto.repo.listRecords?repo="+repo+"&collection=org.tangled.repo.manifest", nil))
+	if w.Code != 200 {
+		t.Fatalf("listRecords manifest: %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"owner":"`+owner+`"`) ||
+		!strings.Contains(body, `"name":"manifest"`) ||
+		!strings.Contains(body, "org.tangled.repo.manifest") {
+		t.Fatalf("manifest wrong: %s", body)
+	}
+}
+
 func TestForgeciBlockVerdictHoldsAutoMerge(t *testing.T) {
 	verdicts := make(chan string, 4)
 	h, key := gateKnot(t, func(system, user string) (string, error) {
