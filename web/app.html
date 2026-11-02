@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=5b">
+<link rel="stylesheet" href="/styles.css?v=6">
 </head>
 <body>
 
@@ -28,7 +28,10 @@
 <main class="repomain">
   <div id="repo-head" style="display:none">
     <h1 id="repo-title"></h1>
-    <div id="repo-did" class="did mono"></div>
+    <div class="repoline">
+      <span id="repo-did" class="did mono"></span>
+      <button id="clone-btn" class="ghost-pill sm mono">clone</button>
+    </div>
   </div>
 
   <div class="workspace" id="workspace" style="display:none">
@@ -48,11 +51,35 @@
 
     <section class="stream">
       <div class="panel-head">
-        <span class="panel-label">activity</span>
+        <div class="seg" id="pane-seg">
+          <button class="segbtn on" data-pane="activity">activity</button>
+          <button class="segbtn" data-pane="files">files</button>
+        </div>
         <span class="flex"></span>
         <span id="live-dot" class="dot" title="live feed"></span>
       </div>
-      <div id="feed" class="feed"></div>
+
+      <div id="pane-activity">
+        <div class="filter-row">
+          <button class="chipbtn on" data-f="all">all</button>
+          <button class="chipbtn" data-f="proposals">proposals</button>
+          <button class="chipbtn" data-f="issues">issues</button>
+          <span class="flex"></span>
+          <button id="new-issue-btn" class="ghost-pill sm">+ issue</button>
+        </div>
+        <div id="feed" class="feed"></div>
+      </div>
+
+      <div id="pane-files" style="display:none">
+        <div id="files-list" class="files-list"></div>
+        <div id="file-view" class="file-view" style="display:none">
+          <div class="file-view-head">
+            <button id="file-back" class="ghost-pill sm">&larr; files</button>
+            <span id="file-path" class="mono dim small"></span>
+          </div>
+          <pre id="file-content" class="mono"></pre>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -79,6 +106,22 @@
   </div>
 </div>
 
+<!-- new issue -->
+<div class="overlay" id="issue-modal" hidden>
+  <div class="modal">
+    <h3>Open an issue</h3>
+    <div class="issue-form">
+      <input type="text" id="issue-title" placeholder="title">
+      <textarea id="issue-body" class="issue-body" placeholder="what is wrong or missing?"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button id="issue-cancel" class="ghost-pill">close</button>
+      <span class="flex"></span>
+      <button id="issue-create" class="ink-pill">open issue</button>
+    </div>
+  </div>
+</div>
+
 <!-- todo.md sheet -->
 <div class="overlay" id="todo-modal" hidden>
   <div class="modal wide">
@@ -92,6 +135,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=6"></script>
+<script type="module" src="/app.js?v=7"></script>
 </body>
 </html>

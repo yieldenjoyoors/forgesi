@@ -212,6 +212,37 @@ func TestForgeciAutoMergeAfterClearReview(t *testing.T) {
 	}
 }
 
+// listFiles: the whole tree at a ref, sorted — the file browser's feed.
+func TestListFiles(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:tree"
+	alice := "did:web:alice.example"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q}`, "tree"); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+	gatePutFile(t, h, key, repo, alice, "docs/readme.md", "docs", "main")
+	gatePutFile(t, h, key, repo, alice, "todo.md", "- [ ] x\n", "main")
+
+	tok := gateToken(t, key, repo, repo)
+	w := gatePost(h, "/xrpc/org.tangled.repo.listFiles", tok, `{"repo":%q}`, repo)
+	if w.Code != 200 {
+		t.Fatalf("listFiles: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"docs/readme.md"`) || !strings.Contains(w.Body.String(), `"todo.md"`) {
+		t.Fatalf("files missing: %s", w.Body.String())
+	}
+	if strings.Index(w.Body.String(), "docs/readme.md") > strings.Index(w.Body.String(), "todo.md") {
+		t.Fatalf("paths not sorted: %s", w.Body.String())
+	}
+	// unknown ref: 404
+	w = gatePost(h, "/xrpc/org.tangled.repo.listFiles", tok, `{"repo":%q,"ref":"nope"}`, repo)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("bad ref: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestForgeciBlockVerdictHoldsAutoMerge(t *testing.T) {
 	verdicts := make(chan string, 4)
 	h, key := gateKnot(t, func(system, user string) (string, error) {

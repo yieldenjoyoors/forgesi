@@ -3,6 +3,7 @@ package knot
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/yieldenjoyoors/forgesi/internal/todo"
@@ -180,6 +181,46 @@ func (k *Knot) handleMerge(w http.ResponseWriter, r *http.Request) {
 		map[string]any{"merge": body.Head, "editor": editor})
 	k.completeTodoOnMerge(body.Repo, body.Ticket, editor)
 	writeJSON(w, http.StatusOK, map[string]any{"commit": commit, "fastForward": ff})
+}
+
+// POST org.tangled.repo.listFiles {repo, ref?} -> {head, files}
+// Public read: the whole tree at a commit, sorted paths — the console's
+// file browser is built on this.
+func (k *Knot) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	var body fileBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", err.Error())
+		return
+	}
+	if _, ok := k.registry.byDID(body.Repo); !ok {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", "no such repo")
+		return
+	}
+	ref := body.Ref
+	if ref == "" {
+		ref = "main"
+	}
+	gr := k.gitrepoRepo(body.Repo)
+	head, hasHead, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/" + ref)
+	if !hasHead {
+		if len(ref) == 40 {
+			head = ref // a raw commit oid also works
+		} else {
+			writeErr(w, http.StatusNotFound, "RefNotFound", "no such ref: "+ref)
+			return
+		}
+	}
+	files, err := gr.Materialize(head)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
+		return
+	}
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	writeJSON(w, http.StatusOK, map[string]any{"head": head, "files": paths})
 }
 
 // completeTodoOnMerge closes the fleet loop: the proposal's ticket carries

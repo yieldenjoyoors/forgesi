@@ -44,7 +44,12 @@ let repos = [], current = null;
 let todoText = '', todoHead = null;
 let runItems = [];        // fleet runs (raw)
 let proposalRecs = [];    // ticket records with targetBranch
+let issueRecs = [];       // ticket records without targetBranch: the issues
+let issueComments = [];   // feed.comments, grouped per ticket by uri suffix
 let liveItems = [];       // {ts, text, title} firehose commits
+let streamFilter = 'all'; // all | proposals | issues
+let paneMode = 'activity';
+let filesLoaded = false;
 
 function spinEl(small) {
 	const el = document.createElement('span');
@@ -248,6 +253,7 @@ async function loadRepos() {
 async function openRepo(r) {
 	current = r;
 	liveItems = [];
+	filesLoaded = false;
 	const sel = $('repo-switch');
 	if (sel.value !== r.did) sel.value = r.did;
 	$('repo-head').style.display = 'block';
@@ -259,7 +265,8 @@ async function openRepo(r) {
 	$('feed').replaceChildren(skeletonRows(3));
 	loadTodo();
 	loadStream();
-	loadProposals();
+	loadTickets();
+	if (window.__setPane) window.__setPane('activity');
 }
 
 // ---------- the plan (todo.md) ----------
@@ -405,15 +412,8 @@ async function feedProposalEl(rec) {
 	el.className = 'ticket';
 	const title = (v.title && v.title.text) || '(untitled)';
 	const closed = v.state === 'closed' || v.state === 'merged';
-	let verdictText = null;
-	try {
-		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.feed.comment&limit=100`);
-		const hit = (out.records || []).find((c) => {
-			const subj = (c.value || {}).subject || {};
-			return subj.uri && subj.uri.endsWith('/' + rkey);
-		});
-		if (hit) verdictText = ((hit.value || {}).body || {}).text || null;
-	} catch { /* none */ }
+	const hit = commentsFor(rkey).find((c) => !String(((c.value || {}).body || {}).text || '').startsWith('🤖'));
+	const verdictText = hit ? ((hit.value || {}).body || {}).text || null : null;
 
 	el.innerHTML = `<span class="st pull">proposal</span>
 		<div class="ticket-body"><div class="tt"></div>
@@ -496,21 +496,147 @@ async function loadStream() {
 async function renderStream() {
 	const box = $('feed');
 	const items = [];
-	for (const p of proposalRecs) items.push(await feedProposalEl(p));
-	for (const r of runItems) items.push({ ts: runTs(r), el: feedRunEl(r) });
-	for (const c of liveItems) items.push({ ts: c.ts, el: feedCommitEl(c) });
+	if (streamFilter === 'all' || streamFilter === 'proposals') {
+		for (const p of proposalRecs) items.push(await feedProposalEl(p));
+	}
+	if (streamFilter === 'all' || streamFilter === 'issues') {
+		for (const i of issueRecs) items.push(await feedIssueEl(i));
+	}
+	if (streamFilter === 'all') {
+		for (const r of runItems) items.push({ ts: runTs(r), el: feedRunEl(r) });
+		for (const c of liveItems) items.push({ ts: c.ts, el: feedCommitEl(c) });
+	}
 	items.sort((a, b) => b.ts - a.ts);
-	box.replaceChildren(...(items.length ? items.map((i) => i.el) : [emptyEl('the fleet is idle — add a task to the plan')]));
+	const empty = streamFilter === 'issues'
+		? 'no issues — open one with “+ issue”'
+		: 'the fleet is idle — add a task to the plan';
+	box.replaceChildren(...(items.length ? items.map((i) => i.el) : [emptyEl(empty)]));
 }
 
-async function loadProposals() {
+// an issue card: state dot, body, its comments, a composer when open.
+async function feedIssueEl(rec) {
+	const v = rec.value || {};
+	const rkey = (rec.uri || '').split('/').pop();
+	const el = document.createElement('article');
+	el.className = 'ticket issue';
+	const state = v.state || 'open';
+	const body = (v.body && v.body.text) || '';
+	const comments = commentsFor(rkey);
+	el.innerHTML = `<span class="st ${state}">${state}</span>
+		<div class="ticket-body"><div class="tt"></div>
+		${body ? `<div class="ibody"></div>` : ''}
+		<div class="icomments"></div>
+		<div class="acts icompose"></div></div>`;
+	el.querySelector('.tt').textContent = (v.title && v.title.text) || '(untitled)';
+	if (body) el.querySelector('.ibody').textContent = body;
+	const box = el.querySelector('.icomments');
+	for (const c of comments) {
+		const row = document.createElement('div');
+		row.className = 'icomment';
+		row.innerHTML = `<span class="mono dim2 small"></span><span class="ct"></span>`;
+		row.querySelector('.mono').textContent = (c.value.createdAt || '').slice(0, 10);
+		row.querySelector('.ct').textContent = ((c.value || {}).body || {}).text || '';
+		box.appendChild(row);
+	}
+	const acts = el.querySelector('.icompose');
+	if (state === 'open') {
+		const input = document.createElement('input');
+		input.placeholder = agent ? 'comment…' : 'sign in to comment';
+		const post = document.createElement('button');
+		post.className = 'act';
+		post.textContent = 'comment';
+		post.onclick = () => busy(post, async () => {
+			await requireSession('sign in to comment');
+			const text = input.value.trim();
+			if (!text) return;
+			try {
+				await knotFetch('POST', '/com.atproto.repo.createRecord', {
+					repo: current.did,
+					collection: 'org.tangled.feed.comment',
+					record: {
+						$type: 'org.tangled.feed.comment',
+						subject: { uri: rec.uri, cid: rec.cid },
+						body: { $type: 'org.tangled.markup.markdown', text },
+						createdAt: new Date().toISOString(),
+					},
+				}, current.did, 'com.atproto.repo.createRecord');
+				input.value = '';
+				loadTickets();
+			} catch (e) {
+				if (e.message !== 'auth-required') log('comment failed: ' + e.message, 'err');
+			}
+		});
+		acts.append(input, post);
+	} else {
+		const closed = document.createElement('span');
+		closed.className = 'pstate';
+		closed.textContent = state + ' · ' + timeago(v.createdAt);
+		acts.appendChild(closed);
+	}
+	return { ts: Date.parse(v.createdAt) || 0, el };
+}
+
+async function loadTickets() {
 	if (!current) return;
 	try {
 		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.track.ticket&limit=50`);
 		const records = out.records || [];
 		proposalRecs = records.filter((rec) => (rec.value || {}).targetBranch);
-	} catch { proposalRecs = []; }
+		issueRecs = records.filter((rec) => !(rec.value || {}).targetBranch);
+	} catch {
+		proposalRecs = [];
+		issueRecs = [];
+	}
+	try {
+		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.feed.comment&limit=100`);
+		issueComments = out.records || [];
+	} catch { issueComments = []; }
 	renderStream();
+}
+
+// comments on one ticket (proposals and issues share the shape)
+function commentsFor(rkey) {
+	return issueComments.filter((c) => {
+		const subj = (c.value || {}).subject || {};
+		return subj.uri && subj.uri.endsWith('/' + rkey);
+	});
+}
+
+// ---------- files (repo browsing) ----------
+
+async function loadFiles(refresh) {
+	if (!current) return;
+	if (filesLoaded && !refresh) return;
+	const box = $('files-list');
+	box.replaceChildren(skeletonRows(5, true));
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.listFiles', { repo: current.did, ref: 'main' }, current.did, 'org.tangled.repo.listFiles');
+		box.replaceChildren(...(out.files || []).map((path) => {
+			const row = document.createElement('div');
+			row.className = 'filerow';
+			row.innerHTML = `<span class="ficon mono">·</span><span class="fname mono"></span>`;
+			row.querySelector('.fname').textContent = path;
+			row.onclick = () => openFile(path);
+			return row;
+		}));
+		filesLoaded = true;
+	} catch (e) {
+		box.replaceChildren(emptyEl('files: ' + e.message));
+	}
+}
+
+async function openFile(path) {
+	$('files-list').style.display = 'none';
+	const view = $('file-view');
+	view.style.display = 'block';
+	$('file-path').textContent = path;
+	$('file-content').textContent = 'loading…';
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path, ref: 'main' }, current.did, 'org.tangled.repo.getFile');
+		$('file-content').textContent = out.content;
+	} catch (e) {
+		$('file-content').textContent = 'failed: ' + e.message;
+	}
 }
 
 // ---------- live firehose (HTTP poll; WS frames are binary dag-cbor) ----------
@@ -614,6 +740,70 @@ if (isConsole) {
 	});
 	$('identity-btn').onclick = () => openAuth();
 	$('auth-cancel').onclick = closeAuth;
+	// pane switch: activity | files
+	function setPane(mode) {
+		paneMode = mode;
+		document.querySelectorAll('.segbtn').forEach((b) => b.classList.toggle('on', b.dataset.pane === mode));
+		$('pane-activity').style.display = mode === 'activity' ? 'block' : 'none';
+		$('pane-files').style.display = mode === 'files' ? 'block' : 'none';
+		if (mode === 'files') loadFiles();
+	}
+	window.__setPane = setPane;
+	document.querySelectorAll('.segbtn').forEach((b) => {
+		b.onclick = () => setPane(b.dataset.pane);
+	});
+	// stream filters
+	document.querySelectorAll('.chipbtn').forEach((b) => {
+		b.onclick = () => {
+			streamFilter = b.dataset.f;
+			document.querySelectorAll('.chipbtn').forEach((x) => x.classList.toggle('on', x === b));
+			renderStream();
+		};
+	});
+	// new issue modal
+	const im = $('issue-modal');
+	$('new-issue-btn').onclick = () => {
+		if (!current) return;
+		im.hidden = false;
+		$('issue-title').focus();
+	};
+	$('issue-cancel').onclick = () => { im.hidden = true; };
+	im.addEventListener('click', (e) => { if (e.target.id === 'issue-modal') im.hidden = true; });
+	$('issue-create').onclick = () => busy($('issue-create'), async () => {
+		await requireSession('sign in to open an issue');
+		const title = $('issue-title').value.trim();
+		if (!title) return;
+		try {
+			await knotFetch('POST', '/com.atproto.repo.createRecord', {
+				repo: current.did,
+				collection: 'org.tangled.track.ticket',
+				record: {
+					$type: 'org.tangled.track.ticket',
+					title: { $type: 'org.tangled.markup.markdown#inline', text: title },
+					body: { $type: 'org.tangled.markup.markdown', text: $('issue-body').value.trim() },
+					state: 'open',
+					createdAt: new Date().toISOString(),
+				},
+			}, current.did, 'com.atproto.repo.createRecord');
+			$('issue-title').value = '';
+			$('issue-body').value = '';
+			im.hidden = true;
+			log('issue opened', 'ok');
+			loadTickets();
+		} catch (e) {
+			if (e.message !== 'auth-required') log('issue failed: ' + e.message, 'err');
+		}
+	});
+	// files
+	$('file-back').onclick = () => {
+		$('file-view').style.display = 'none';
+		$('files-list').style.display = 'flex';
+	};
+	$('clone-btn').onclick = () => {
+		const url = 'https://forgesi.org/' + current.did;
+		if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+		log('clone url copied: git clone ' + url, 'ok');
+	};
 	$('auth-go').onclick = () => busy($('auth-go'), async () => {
 		const handle = $('auth-handle').value.trim();
 		if (!handle) return;

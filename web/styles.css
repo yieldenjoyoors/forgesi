@@ -188,6 +188,74 @@ input::placeholder { color: var(--faint); }
 .plan-add input:focus { border-color: var(--ink); }
 .plan-add .ink-pill { height: 38px; }
 
+/* pane segment switch */
+.seg {
+  display: flex; gap: 2px;
+  background: var(--canvas-soft); border-radius: var(--r-full); padding: 3px;
+}
+.segbtn {
+  background: none; border: none; border-radius: var(--r-full);
+  font-size: 13px; font-weight: 600; color: var(--muted);
+  padding: 5px 16px; height: auto; cursor: pointer;
+}
+.segbtn.on { background: var(--canvas); color: var(--ink); }
+
+.filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.chipbtn {
+  background: none; border: none; border-radius: var(--r-full);
+  font-size: 12.5px; font-weight: 500; color: var(--muted);
+  padding: 5px 12px; height: auto; cursor: pointer;
+}
+.chipbtn:hover { background: var(--canvas-soft); color: var(--ink); }
+.chipbtn.on { background: var(--ink); color: var(--on-primary); }
+
+.repoline { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+
+/* files pane */
+.files-list { display: flex; flex-direction: column; gap: 4px; }
+.filerow {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--hairline-soft); border-radius: var(--r-sm);
+  padding: 9px 16px; cursor: pointer; transition: background 0.15s;
+}
+.filerow:hover { background: var(--canvas-soft); }
+.filerow .ficon { color: var(--faint); }
+.filerow .fname { font-size: 13px; color: var(--ink-soft); }
+
+.file-view-head {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+}
+.file-view pre {
+  background: var(--canvas-soft); border-radius: var(--r-sm);
+  padding: 18px 20px; font-size: 12.5px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word; max-height: 70vh;
+  overflow: auto; color: var(--ink-soft);
+}
+
+/* issues */
+.ticket.issue .ibody {
+  margin-top: 8px; color: var(--muted); font-size: 13.5px; line-height: 1.45;
+}
+.icomments { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.icomment {
+  background: var(--canvas-soft); border-radius: var(--r-sm);
+  padding: 8px 12px; font-size: 13px; color: var(--ink-soft);
+  display: flex; gap: 10px; align-items: baseline;
+}
+.icomment .ct { flex: 1; }
+.icompose { display: flex; gap: 8px; align-items: center; }
+.icompose input { flex: 1; background: var(--canvas); border-color: var(--hairline); border-width: 1px; font-size: 13px; }
+.icompose .act { height: 34px; padding: 0 14px; font-size: 13px; }
+
+.issue-form { display: flex; flex-direction: column; gap: 10px; }
+.issue-body {
+  background: var(--field); border: 2px solid transparent; border-radius: var(--r-sm);
+  color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  min-height: 110px; resize: vertical; outline: none; padding: 10px 14px;
+  transition: border-color 0.15s;
+}
+.issue-body:focus { border-color: var(--ink); }
+
 /* stream pane */
 .feed { display: flex; flex-direction: column; gap: 10px; }
 

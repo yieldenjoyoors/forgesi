@@ -90,6 +90,7 @@ func New(opt Options) *Knot {
 	k.fleetRoutes()
 	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.getFile", k.handleGetFile)
 	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.putFile", k.handlePutFile)
+	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.listFiles", k.handleListFiles)
 	k.mux.HandleFunc("POST /xrpc/org.tangled.git.merge", k.handleMerge)
 	return k
 }
