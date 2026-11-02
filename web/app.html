@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ForgeSI console</title>
+<title>ForgeSI</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=4">
+<link rel="stylesheet" href="/styles.css?v=5b">
 </head>
 <body>
 
@@ -16,67 +16,82 @@
   <a class="brand" href="/">ForgeSI</a>
   <select id="repo-switch" class="pill-select"><option value="">repos…</option></select>
   <button id="new-repo-btn" class="ghost-pill">+ new repo</button>
-  <span style="flex:1"></span>
-  <span id="identity" class="mono"></span>
-  <form id="signin">
-    <input type="text" id="handle" placeholder="you@example.com">
-    <button type="submit">sign in</button>
-  </form>
+  <span class="spacer"></span>
+  <button id="identity-btn" class="ghost-pill dim2">sign in</button>
 </header>
 
 <div id="new-repo-row" class="newrepo-row" style="display:none">
   <input type="text" id="new-repo" placeholder="new repo name">
-  <button id="create-repo">create repo</button>
+  <button id="create-repo" class="ink-pill">create repo</button>
 </div>
 
 <main class="repomain">
   <div id="repo-head" style="display:none">
     <h1 id="repo-title"></h1>
     <div id="repo-did" class="did mono"></div>
-    <div class="tabs" id="tabs">
-      <button class="tab on" data-tab="tickets">tickets</button>
-      <button class="tab" data-tab="proposals">proposals</button>
-      <button class="tab" data-tab="fleet">fleet</button>
-      <button class="tab" data-tab="todo">todo.md</button>
-    </div>
   </div>
 
-  <section id="tab-tickets">
-    <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
-    <div class="newform" id="ticket-form" style="display:none">
-      <input type="text" id="new-ticket" placeholder="describe the work — one line, one task">
-      <button id="create-ticket">open ticket</button>
-    </div>
-  </section>
-
-  <section id="tab-proposals" style="display:none">
-    <div class="ticketlist" id="proposals"></div>
-  </section>
-
-  <section id="tab-fleet" style="display:none">
-    <div class="fleetgrid">
-      <div>
-        <div class="seclabel">runs</div>
-        <div id="runs" class="runlist"><div class="empty">—</div></div>
+  <div class="workspace" id="workspace" style="display:none">
+    <aside class="plan">
+      <div class="panel-head">
+        <span class="panel-label">plan</span>
+        <span class="mono dim2 small">todo.md</span>
+        <span class="flex"></span>
+        <button id="edit-todo" class="ghost-pill sm">edit</button>
       </div>
-      <div>
-        <div class="seclabel">live <span class="dot" id="live-dot"></span></div>
-        <div id="live" class="runlist"><div class="empty">connecting…</div></div>
+      <div id="plan-list" class="plan-list"></div>
+      <div class="plan-add">
+        <input type="text" id="plan-input" placeholder="add a task — one line" autocomplete="off">
+        <button id="plan-add" class="ink-pill">add</button>
       </div>
-    </div>
-  </section>
+    </aside>
 
-  <section id="tab-todo" style="display:none">
-    <div class="newform">
-      <span id="todo-status" class="mono dim">—</span>
-      <button id="save-todo">save</button>
-    </div>
-    <textarea id="todo-editor" class="mono" spellcheck="false"></textarea>
-  </section>
+    <section class="stream">
+      <div class="panel-head">
+        <span class="panel-label">activity</span>
+        <span class="flex"></span>
+        <span id="live-dot" class="dot" title="live feed"></span>
+      </div>
+      <div id="feed" class="feed"></div>
+    </section>
+  </div>
 
   <div class="flash" id="flash"></div>
 </main>
 
-<script type="module" src="/app.js?v=4"></script>
+<!-- auth -->
+<div class="overlay" id="auth-modal" hidden>
+  <div class="modal">
+    <h3>Sign in</h3>
+    <p class="dim modal-sub">Your handle — Bluesky or any AT Protocol account. You approve access on your PDS, then come right back.</p>
+    <div id="auth-body">
+      <input type="text" id="auth-handle" placeholder="you.example.com" autocomplete="off">
+      <button id="auth-go" class="ink-pill">continue</button>
+    </div>
+    <div id="auth-session" style="display:none">
+      <p class="mono dim small" id="auth-did"></p>
+      <button id="auth-out" class="ghost-pill">sign out</button>
+    </div>
+    <div class="modal-foot">
+      <button id="auth-cancel" class="ghost-pill">close</button>
+      <span id="auth-err" class="err"></span>
+    </div>
+  </div>
+</div>
+
+<!-- todo.md sheet -->
+<div class="overlay" id="todo-modal" hidden>
+  <div class="modal wide">
+    <div class="sheet-head">
+      <span class="panel-label">todo.md</span>
+      <span class="flex"></span>
+      <span id="todo-status" class="mono dim small">—</span>
+      <button id="save-todo" class="ink-pill">save</button>
+    </div>
+    <textarea id="todo-editor" class="mono" spellcheck="false"></textarea>
+  </div>
+</div>
+
+<script type="module" src="/app.js?v=6"></script>
 </body>
 </html>

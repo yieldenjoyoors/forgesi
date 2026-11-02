@@ -1,8 +1,10 @@
-// ForgeSI console: the deck. Reads are anonymous; writes require an
-// atproto OAuth session (sign in with your PDS handle). Authenticated
-// calls mint a short-lived service-auth JWT from your PDS (aud = the
-// repo DID or the knot DID, lxm = the method) — exactly what the Tangled
-// web app does when talking to knots.
+// ForgeSI console: a repository workspace. The plan (todo.md) sits on
+// the left; the activity stream — runs, proposals, commits — flows on
+// the right. Reads are anonymous; writes require an atproto OAuth
+// session (sign-in modal opens the moment you try to act, or tap the
+// header chip). Authenticated calls mint a short-lived service-auth
+// JWT from your PDS (aud = the repo DID or the knot DID, lxm = the
+// method) — exactly what the Tangled web app does with knots.
 import {
 	configureOAuth,
 	createAuthorizationUrl,
@@ -39,6 +41,10 @@ const handleResolver = new XrpcHandleResolver({ serviceUrl: 'https://public.api.
 
 const $ = (id) => document.getElementById(id);
 let repos = [], current = null;
+let todoText = '', todoHead = null;
+let runItems = [];        // fleet runs (raw)
+let proposalRecs = [];    // ticket records with targetBranch
+let liveItems = [];       // {ts, text, title} firehose commits
 
 function spinEl(small) {
 	const el = document.createElement('span');
@@ -74,6 +80,20 @@ function log(msg, cls) {
 	console.log('[console]', msg);
 }
 
+function emptyEl(text) {
+	return Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
+}
+
+function timeago(iso) {
+	const t = Date.parse(iso);
+	if (!t || Number.isNaN(t)) return '';
+	const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+	if (s < 60) return s + 's';
+	if (s < 3600) return Math.floor(s / 60) + 'm';
+	if (s < 86400) return Math.floor(s / 3600) + 'h';
+	return Math.floor(s / 86400) + 'd';
+}
+
 // ---------- auth ----------
 
 let oauthReady = false;
@@ -100,7 +120,7 @@ async function resumeSession() {
 		const session = await getSession(did, { allowStale: true });
 		agent = new OAuthUserAgent(session);
 		agentDID = did;
-		setIdentity(did);
+		setIdentity();
 	} catch {
 		sessionStorage.removeItem('forgesi-did');
 	}
@@ -121,14 +141,47 @@ function signOut() {
 	agent = null;
 	agentDID = null;
 	sessionStorage.removeItem('forgesi-did');
-	setIdentity(null);
+	setIdentity();
 }
 
-function setIdentity(did) {
-	const el = $('identity');
+function setIdentity() {
+	const el = $('identity-btn');
 	if (!el) return;
-	el.textContent = did ? 'signed in: ' + did : 'not signed in (reads only)';
-	el.className = 'mono ' + (did ? 'ok-flash' : 'dim');
+	if (agent) {
+		el.textContent = (agentDID || '').replace('did:plc:', '').replace('did:web:', '').slice(0, 18);
+		el.className = 'ghost-pill mono';
+		el.title = agentDID || '';
+	} else {
+		el.textContent = 'sign in';
+		el.className = 'ghost-pill dim2';
+	}
+}
+
+// the sign-in modal doubles as the session card. `why` explains the ask.
+function openAuth(why) {
+	const m = $('auth-modal');
+	if (!m) return;
+	m.hidden = false;
+	$('auth-err').textContent = '';
+	$('auth-session').style.display = 'none';
+	$('auth-body').style.display = agent ? 'none' : 'flex';
+	if (agent) {
+		$('auth-session').style.display = 'block';
+		$('auth-did').textContent = agentDID;
+	} else if (why) {
+		$('auth-err').className = 'why';
+		$('auth-err').textContent = why;
+	}
+	if (!agent) $('auth-handle').focus();
+}
+
+function closeAuth() { $('auth-modal').hidden = true; }
+
+// gate a write action: resolve when signed in, open the modal otherwise.
+function requireSession(why) {
+	if (agent) return Promise.resolve();
+	openAuth(why || 'sign in to continue');
+	return Promise.reject(new Error('auth-required'));
 }
 
 // service-auth: mint a JWT at the PDS for the given audience/method,
@@ -171,25 +224,6 @@ async function xrpc(method, path, body) {
 	return json;
 }
 
-let runsLoaded = false;
-async function loadRuns() {
-	if (!runsLoaded) $('runs').replaceChildren(spinEl(), Object.assign(document.createElement('span'), { className: 'dim-note', textContent: ' loading' }));
-	try {
-		const out = await xrpc('GET', '/org.tangled.fleet.runs' + (current ? '?repo=' + encodeURIComponent(current.did) : ''));
-		const runs = out.runs || [];
-		$('runs').replaceChildren(...(runs.length ? runs.map((r) => {
-			const el = document.createElement('div');
-			el.className = 'run';
-			const st = document.createElement('span');
-			st.className = 'st ' + r.status;
-			st.textContent = r.status;
-			el.appendChild(st);
-			el.appendChild(document.createTextNode(' ' + r.title.slice(0, 34)));
-			return el;
-		}) : [Object.assign(document.createElement('div'), { className: 'empty', textContent: 'no runs yet' })]));
-	} catch { /* best effort */ }
-}
-
 let reposLoaded = false;
 async function loadRepos() {
 	const sel = $('repo-switch');
@@ -213,217 +247,295 @@ async function loadRepos() {
 
 async function openRepo(r) {
 	current = r;
+	liveItems = [];
 	const sel = $('repo-switch');
 	if (sel.value !== r.did) sel.value = r.did;
 	$('repo-head').style.display = 'block';
+	$('workspace').style.display = 'grid';
 	$('repo-title').textContent = r.name;
 	$('repo-did').textContent = r.did;
-	$('ticket-form').style.display = 'flex';
-	setTab('tickets');
 	log('');
-	loadRuns();
+	$('plan-list').replaceChildren(skeletonRows(4, true));
+	$('feed').replaceChildren(skeletonRows(3));
 	loadTodo();
-	$('tickets').replaceChildren(skeletonRows(3));
-	$('proposals').replaceChildren(skeletonRows(2));
-	try {
-		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(r.did)}&collection=org.tangled.track.ticket&limit=50`);
-		const records = out.records || [];
-		const todos = records.filter((rec) => !(rec.value || {}).targetBranch);
-		const proposals = records.filter((rec) => (rec.value || {}).targetBranch);
-		$('tickets').replaceChildren(...(todos.length ? todos.map(renderTicket) : [emptyEl('No tickets. Open the first one below.')]));
-		renderProposals(r, proposals);
-	} catch (e) {
-		$('tickets').replaceChildren(emptyEl('listRecords: ' + e.message));
-	}
+	loadStream();
+	loadProposals();
 }
 
-// ---------- todo.md editor ----------
+// ---------- the plan (todo.md) ----------
 
-let todoHead = null;
+function runForTask(title) {
+	return runItems.find((r) => r.title === title
+		&& ['assigned', 'running', 'queued'].includes(r.status));
+}
+
+function failedForTask(title) {
+	return runItems.some((r) => r.title === title && r.status === 'failed');
+}
+
+function renderPlan() {
+	const box = $('plan-list');
+	const rows = [];
+	const lines = todoText.split('\n');
+	let shown = 0;
+	for (const raw of lines) {
+		const m = raw.match(/^\s*- \[( |x|X)\] (.*)$/);
+		if (!m) {
+			if (raw.trim()) rows.push(Object.assign(document.createElement('div'), {
+				className: 'plan-note', textContent: raw.trim(),
+			}));
+			continue;
+		}
+		shown++;
+		const done = m[1].toLowerCase() === 'x';
+		const text = m[2].trim();
+		const running = !done && runForTask(text);
+		const failed = !done && !running && failedForTask(text);
+		const el = document.createElement('div');
+		el.className = 'planrow' + (done ? ' done' : '') + (running ? ' running' : '') + (failed ? ' failed' : '');
+		const glyph = document.createElement('span');
+		glyph.className = 'glyph';
+		if (running) glyph.appendChild(spinEl(true));
+		el.appendChild(glyph);
+		const t = document.createElement('span');
+		t.className = 'pt';
+		t.textContent = text;
+		if (done) t.className = 'pt done';
+		el.appendChild(t);
+		if (running && running.branch) {
+			const meta = document.createElement('span');
+			meta.className = 'pr-meta mono';
+			meta.textContent = running.branch;
+			el.appendChild(meta);
+		}
+		rows.push(el);
+	}
+	box.replaceChildren(...(rows.length ? rows : [emptyEl('empty plan — add the first task below')]));
+}
+
+let todoLoading = false;
 async function loadTodo() {
-	if (!current) return;
-	const ta = $('todo-editor');
-	ta.disabled = true;
-	$('todo-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' loading' }));
+	if (!current || todoLoading) return;
+	todoLoading = true;
 	try {
 		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path: 'todo.md', ref: 'main' }, current.did, 'org.tangled.repo.getFile');
-		ta.value = out.content;
+		todoText = out.content;
 		todoHead = out.head;
-		$('todo-status').textContent = (out.content.match(/^- \[[ xX]\]/gm) || []).length + ' items';
 	} catch {
-		ta.value = '# todo\n\n- [ ] first task\n';
+		todoText = '# todo\n';
 		todoHead = null;
-		$('todo-status').textContent = 'new file';
 	} finally {
-		ta.disabled = false;
+		todoLoading = false;
 	}
+	renderPlan();
 }
 
-if (isConsole) $('save-todo').onclick = async () => {
-	if (!current) return;
-	$('save-todo').disabled = true;
-	$('todo-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' saving' }));
+// append one task line to todo.md — the plan IS the queue.
+async function addTask(text) {
+	await requireSession('sign in to add to the plan');
 	try {
+		const fresh = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path: 'todo.md', ref: 'main' }, current.did, 'org.tangled.repo.getFile');
+		const sep = fresh.content.endsWith('\n') ? '' : '\n';
 		const out = await knotFetch('POST', '/org.tangled.repo.putFile', {
 			repo: current.did,
 			path: 'todo.md',
-			content: $('todo-editor').value,
-			baseHead: todoHead || undefined,
-			msg: 'Update todo.md from console',
+			content: fresh.content + sep + '- [ ] ' + text + '\n',
+			baseHead: fresh.head || undefined,
+			msg: 'plan: add "' + text.slice(0, 60) + '"',
 		}, current.did, 'org.tangled.repo.putFile');
+		todoText = fresh.content + sep + '- [ ] ' + text + '\n';
 		todoHead = out.head;
-		$('todo-status').textContent = 'saved ' + out.commit.slice(0, 8);
-		log('todo.md saved', 'ok');
+		renderPlan();
+		log('added to the plan — the fleet will pick it up', 'ok');
 	} catch (e) {
-		if (e.status === 409) {
-			log('todo.md changed underneath you — reloading the fresh file', 'err');
-			loadTodo();
-		} else {
-			log('save failed: ' + e.message, 'err');
-		}
-	} finally {
-		$('save-todo').disabled = false;
+		if (e.message !== 'auth-required') log('could not add: ' + e.message, 'err');
 	}
-};
-
-
-// ---------- console-only wiring (the callback page has no console DOM) ----------
-
-const isConsole = !!document.getElementById('repo-switch');
-
-function setTab(name) {
-	document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
-	for (const t of ['tickets', 'proposals', 'fleet', 'todo']) {
-		$('tab-' + t).style.display = t === name ? 'block' : 'none';
-	}
-	if (name === 'todo' && current) loadTodo();
 }
-if (isConsole) document.querySelectorAll('.tab').forEach((btn) => {
-	btn.onclick = () => setTab(btn.dataset.tab);
-});
 
-function renderTicket(rec) {
-	const v = rec.value || {};
-	const title = (v.title && v.title.text) || '(untitled)';
+// ---------- the stream ----------
+
+function runTs(r) { return Date.parse(r.createdAt) || 0; }
+
+function feedRunEl(r) {
 	const el = document.createElement('div');
-	el.className = 'ticket';
-	const state = v.state || 'open';
-	el.innerHTML = `<span class="st ${state}">${state}</span><div><div class="tt"></div></div>`;
-	el.querySelector('.tt').textContent = title;
+	el.className = 'feedrow';
+	const st = document.createElement('span');
+	st.className = 'st ' + (r.status || '');
+	if (['assigned', 'running', 'queued'].includes(r.status)) st.appendChild(spinEl(true));
+	else st.textContent = r.status;
+	el.appendChild(st);
+	const t = document.createElement('span');
+	t.className = 'fr-title';
+	t.textContent = r.title;
+	el.appendChild(t);
+	const meta = document.createElement('span');
+	meta.className = 'meta mono';
+	meta.textContent = r.branch || '';
+	el.appendChild(meta);
+	el.appendChild(Object.assign(document.createElement('span'), { className: 'flex' }));
+	const ago = document.createElement('span');
+	ago.className = 'ago small';
+	ago.textContent = timeago(r.createdAt || r.id);
+	el.appendChild(ago);
 	return el;
 }
 
-function emptyEl(text) {
-	return Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
+function feedCommitEl(item) {
+	const el = document.createElement('div');
+	el.className = 'feedrow';
+	const st = document.createElement('span');
+	st.className = 'st done';
+	el.appendChild(st);
+	const t = document.createElement('span');
+	t.className = 'fr-title mono';
+	t.textContent = item.text;
+	el.appendChild(t);
+	el.appendChild(Object.assign(document.createElement('span'), { className: 'flex' }));
+	const ago = document.createElement('span');
+	ago.className = 'ago small';
+	ago.textContent = 'now';
+	el.appendChild(ago);
+	return el;
 }
 
-async function renderProposals(repo, proposals) {
-	const box = $('proposals');
-	if (!proposals.length) {
-		box.replaceChildren(emptyEl('No proposals yet.'));
-		return;
-	}
-	let comments = [];
+async function feedProposalEl(rec) {
+	const v = rec.value || {};
+	const rkey = (rec.uri || '').split('/').pop();
+	const el = document.createElement('article');
+	el.className = 'ticket';
+	const title = (v.title && v.title.text) || '(untitled)';
+	const closed = v.state === 'closed' || v.state === 'merged';
+	let verdictText = null;
 	try {
-		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(repo.did)}&collection=org.tangled.feed.comment&limit=100`);
-		comments = out.records || [];
-	} catch { /* none */ }
-	box.replaceChildren(...proposals.map((rec) => {
-		const v = rec.value || {};
-		const rkey = (rec.uri || '').split('/').pop();
-		const el = document.createElement('div');
-		el.className = 'ticket';
-		const title = (v.title && v.title.text) || '(untitled)';
-		const verdict = comments.find((c) => {
+		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.feed.comment&limit=100`);
+		const hit = (out.records || []).find((c) => {
 			const subj = (c.value || {}).subject || {};
 			return subj.uri && subj.uri.endsWith('/' + rkey);
 		});
-		el.innerHTML = `<span class="st pull">proposal</span>
-			<div style="min-width:0"><div class="tt"></div>
-			<div class="meta mono">${v.targetBranch || ''}</div>
-			${verdict ? `<div class="verdict"><span class="who">machine review</span><br><span class="vt"></span></div>` : ''}
-			<div class="acts">
-				<button class="act merge">merge</button>
-				<button class="act close">close</button>
-				<span class="meta mono pstate"></span>
-			</div></div>`;
-		el.querySelector('.tt').textContent = title;
-		if (verdict) el.querySelector('.vt').textContent = ((verdict.value || {}).body || {}).text || '';
-		const stateEl = el.querySelector('.pstate');
-		if (!agent) {
-			stateEl.textContent = 'sign in to act';
-		} else {
-			el.querySelector('.merge').onclick = () => busy(el.querySelector('.merge'), async () => {
-				stateEl.textContent = 'merging…';
+		if (hit) verdictText = ((hit.value || {}).body || {}).text || null;
+	} catch { /* none */ }
+
+	el.innerHTML = `<span class="st pull">proposal</span>
+		<div class="ticket-body"><div class="tt"></div>
+		<div class="meta mono"></div>
+		${verdictText ? `<div class="verdict"><span class="who">machine review</span><span class="vt"></span></div>` : ''}
+		<div class="acts"></div></div>`;
+	el.querySelector('.tt').textContent = title;
+	el.querySelector('.meta').textContent = `${v.targetBranch || ''} → main`;
+	if (verdictText) el.querySelector('.vt').textContent = verdictText;
+	const acts = el.querySelector('.acts');
+	if (closed) {
+		acts.appendChild(Object.assign(document.createElement('span'), { className: 'pstate', textContent: v.state }));
+	} else if (!agent) {
+		const b = document.createElement('button');
+		b.className = 'act merge';
+		b.textContent = 'merge';
+		b.onclick = () => openAuth('sign in to merge');
+		acts.appendChild(b);
+		acts.appendChild(Object.assign(document.createElement('span'), { className: 'pstate', textContent: 'or browse only' }));
+	} else {
+		const mb = document.createElement('button');
+		mb.className = 'act merge';
+		mb.textContent = 'merge';
+		const cb = document.createElement('button');
+		cb.className = 'act';
+		cb.textContent = 'close';
+		const stateEl = Object.assign(document.createElement('span'), { className: 'pstate' });
+		acts.append(mb, cb, stateEl);
+		mb.onclick = () => busy(mb, async () => {
+			stateEl.textContent = 'merging…';
+			try {
+				const out = await knotFetch('POST', '/org.tangled.git.merge', {
+					repo: current.did, base: 'main', head: v.targetBranch,
+				}, current.did, 'org.tangled.git.merge');
+				stateEl.textContent = out.fastForward ? 'fast-forwarded' : 'merged ' + out.commit.slice(0, 8);
 				try {
-					const out = await knotFetch('POST', '/org.tangled.git.merge', {
-						repo: repo.did, base: 'main', head: v.targetBranch,
-					}, repo.did, 'org.tangled.git.merge');
-					stateEl.textContent = out.fastForward ? 'fast-forwarded' : 'merged ' + out.commit.slice(0, 8);
-					// mark the ticket closed with a merge comment
-					try {
-						await knotFetch('POST', '/com.atproto.repo.createRecord', {
-							repo: repo.did,
-							collection: 'org.tangled.feed.comment',
-							record: {
-								$type: 'org.tangled.feed.comment',
-								subject: { uri: rec.uri, cid: rec.cid },
-								body: { $type: 'org.tangled.markup.markdown', text: 'merged by ' + agentDID },
-								createdAt: new Date().toISOString(),
-							},
-						}, repo.did, 'com.atproto.repo.createRecord');
-					} catch { /* comment is best-effort */ }
-					openRepo(repo);
-				} catch (e) {
-					stateEl.textContent = 'failed: ' + e.message;
-				}
-			});
-			el.querySelector('.close').onclick = () => busy(el.querySelector('.close'), async () => {
-				stateEl.textContent = 'closing…';
-				try {
-					await knotFetch('POST', '/com.atproto.repo.putRecord', {
-						repo: repo.did, collection: 'org.tangled.track.ticket', rkey,
-						record: { ...v, state: 'closed' },
-					}, repo.did, 'com.atproto.repo.putRecord');
-					stateEl.textContent = 'closed';
-					openRepo(repo);
-				} catch (e) {
-					stateEl.textContent = 'failed: ' + e.message;
-				}
-			});
-		}
-		return el;
-	}));
+					await knotFetch('POST', '/com.atproto.repo.createRecord', {
+						repo: current.did,
+						collection: 'org.tangled.feed.comment',
+						record: {
+							$type: 'org.tangled.feed.comment',
+							subject: { uri: rec.uri, cid: rec.cid },
+							body: { $type: 'org.tangled.markup.markdown', text: 'merged by ' + agentDID },
+							createdAt: new Date().toISOString(),
+						},
+					}, current.did, 'com.atproto.repo.createRecord');
+				} catch { /* comment is best-effort */ }
+				openRepo(current);
+			} catch (e) {
+				stateEl.textContent = 'failed: ' + e.message;
+			}
+		});
+		cb.onclick = () => busy(cb, async () => {
+			stateEl.textContent = 'closing…';
+			try {
+				await knotFetch('POST', '/com.atproto.repo.putRecord', {
+					repo: current.did, collection: 'org.tangled.track.ticket', rkey,
+					record: { ...v, state: 'closed' },
+				}, current.did, 'com.atproto.repo.putRecord');
+				stateEl.textContent = 'closed';
+				openRepo(current);
+			} catch (e) {
+				stateEl.textContent = 'failed: ' + e.message;
+			}
+		});
+	}
+	return { ts: Date.parse(v.createdAt) || 0, el };
+}
+
+async function loadStream() {
+	if (!current) return;
+	try {
+		const out = await xrpc('GET', '/org.tangled.fleet.runs?repo=' + encodeURIComponent(current.did));
+		runItems = (out.runs || []).slice(0, 20);
+	} catch { runItems = []; }
+	renderPlan();
+	renderStream();
+}
+
+async function renderStream() {
+	const box = $('feed');
+	const items = [];
+	for (const p of proposalRecs) items.push(await feedProposalEl(p));
+	for (const r of runItems) items.push({ ts: runTs(r), el: feedRunEl(r) });
+	for (const c of liveItems) items.push({ ts: c.ts, el: feedCommitEl(c) });
+	items.sort((a, b) => b.ts - a.ts);
+	box.replaceChildren(...(items.length ? items.map((i) => i.el) : [emptyEl('the fleet is idle — add a task to the plan')]));
+}
+
+async function loadProposals() {
+	if (!current) return;
+	try {
+		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.track.ticket&limit=50`);
+		const records = out.records || [];
+		proposalRecs = records.filter((rec) => (rec.value || {}).targetBranch);
+	} catch { proposalRecs = []; }
+	renderStream();
 }
 
 // ---------- live firehose (HTTP poll; WS frames are binary dag-cbor) ----------
 
 let liveCursor = 0, liveFail = 0;
 async function pollLive() {
-	if (document.hidden || !$('live')) return;
+	if (document.hidden || !$('feed')) return;
 	try {
 		const out = await xrpc('GET', '/com.atproto.sync.getEvents?cursor=' + liveCursor + '&limit=25');
 		const events = out.events || [];
 		for (const ev of events) {
 			liveCursor = Math.max(liveCursor, ev.seq || 0);
-			const box = $('live');
-			if (!box) break;
-			const el = document.createElement('div');
-			el.className = 'run';
-			el.innerHTML = `<span class="st done"></span> <span class="mono" style="font-size:11px"></span>`;
-			el.querySelector('.mono').textContent =
-				shortRepo(ev.repo) + ' ' + (ev.kind || 'commit') +
-				(ev.change ? ' ' + String(ev.change).slice(0, 7) : '');
-			el.title = (ev.repo || '') + ' @' + (ev.rev || '');
-			box.prepend(el);
-			while (box.children.length > 14) box.lastChild.remove();
+			liveItems.unshift({
+				ts: Date.now(),
+				text: shortRepo(ev.repo) + ' ' + (ev.kind || 'commit') + (ev.change ? ' ' + String(ev.change).slice(0, 7) : ''),
+			});
+		}
+		if (events.length) {
+			liveItems = liveItems.slice(0, 12);
+			renderStream();
 		}
 		$('live-dot').className = 'dot on';
 		liveFail = 0;
 	} catch {
-		if (++liveFail > 3) {
-			$('live-dot').className = 'dot';
-		}
+		if (++liveFail > 3) $('live-dot').className = 'dot';
 	}
 }
 
@@ -436,10 +548,15 @@ function shortRepo(did) {
 	return (did.split(':repo:')[1] || did).slice(0, 18);
 }
 
+// ---------- console wiring (the callback page has none of this DOM) ----------
+
+const isConsole = !!document.getElementById('repo-switch');
+
 if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () => {
 	const name = $('new-repo').value.trim();
 	if (!name) return;
 	try {
+		await requireSession('sign in to create a repo');
 		const out = await knotFetch('POST', '/org.tangled.repo.createRepo', { name, defaultBranch: 'main' }, KNOT_DID, 'org.tangled.repo.createRepo');
 		$('new-repo').value = '';
 		$('new-repo-row').style.display = 'none';
@@ -447,42 +564,72 @@ if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () 
 		await loadRepos();
 		const r = repos.find((x) => x.did === out.did);
 		openRepo(r || { did: out.did, name });
-	} catch (e) { log(e.message, 'err'); }
+	} catch (e) { if (e.message !== 'auth-required') log(e.message, 'err'); }
 });
 
-if (isConsole) $('create-ticket').onclick = () => busy($('create-ticket'), async () => {
-	const text = $('new-ticket').value.trim();
-	if (!text || !current) return;
-	try {
-		await knotFetch('POST', '/com.atproto.repo.createRecord', {
-			repo: current.did,
-			collection: 'org.tangled.track.ticket',
-			record: {
-				$type: 'org.tangled.track.ticket',
-				title: { $type: 'org.tangled.markup.markdown#inline', text },
-				state: 'open',
-				createdAt: new Date().toISOString(),
-			},
-		}, current.did, 'com.atproto.repo.createRecord');
-		$('new-ticket').value = '';
-		log('ticket opened', 'ok');
-		openRepo(current);
-	} catch (e) { log(e.message, 'err'); }
-});
-
-// ---------- sign-in form ----------
-
-if (isConsole) document.getElementById('signin').onsubmit = async (e) => {
-	e.preventDefault();
-	const handle = document.getElementById('handle').value.trim();
-	if (!handle) return;
-	log('starting sign-in for ' + handle + '…');
-	try {
-		await signIn(handle);
-	} catch (err) {
-		log('sign-in failed: ' + (err.message || err), 'err');
+if (isConsole) {
+	const add = () => {
+		const text = $('plan-input').value.trim();
+		if (!text || !current) return;
+		$('plan-input').value = '';
+		addTask(text);
+	};
+	$('plan-add').onclick = add;
+	$('plan-input').onkeydown = (e) => { if (e.key === 'Enter') add(); };
+	$('edit-todo').onclick = () => {
+		if (!current) return;
+		$('todo-editor').value = todoText;
+		$('todo-status').textContent = todoHead ? 'last commit ' + String(todoHead).slice(0, 8) : 'new file';
+		$('todo-modal').hidden = false;
+		$('todo-editor').focus();
+	};
+	$('save-todo').onclick = () => busy($('save-todo'), async () => {
+		await requireSession('sign in to edit todo.md');
+		$('todo-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' saving' }));
+		try {
+			const out = await knotFetch('POST', '/org.tangled.repo.putFile', {
+				repo: current.did,
+				path: 'todo.md',
+				content: $('todo-editor').value,
+				baseHead: todoHead || undefined,
+				msg: 'Update todo.md from console',
+			}, current.did, 'org.tangled.repo.putFile');
+			todoText = $('todo-editor').value;
+			todoHead = out.head;
+			$('todo-status').textContent = 'saved ' + out.commit.slice(0, 8);
+			renderPlan();
+			log('todo.md saved', 'ok');
+			setTimeout(() => { $('todo-modal').hidden = true; }, 500);
+		} catch (e) {
+			if (e.status === 409) {
+				$('todo-status').textContent = 'conflict — todo.md changed, reloading';
+				const fresh = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path: 'todo.md', ref: 'main' }, current.did, 'org.tangled.repo.getFile');
+				todoText = fresh.content; todoHead = fresh.head;
+				$('todo-editor').value = fresh.content;
+				renderPlan();
+			} else {
+				$('todo-status').textContent = 'failed: ' + e.message;
+			}
+		}
+	});
+	$('identity-btn').onclick = () => openAuth();
+	$('auth-cancel').onclick = closeAuth;
+	$('auth-go').onclick = () => busy($('auth-go'), async () => {
+		const handle = $('auth-handle').value.trim();
+		if (!handle) return;
+		try {
+			await signIn(handle);
+		} catch (err) {
+			$('auth-err').textContent = (err.message || err);
+		}
+	});
+	$('auth-handle').onkeydown = (e) => { if (e.key === 'Enter') $('auth-go').click(); };
+	$('auth-out').onclick = () => { signOut(); closeAuth(); };
+	// close overlays on backdrop click
+	for (const id of ['auth-modal', 'todo-modal']) {
+		$(id).addEventListener('click', (e) => { if (e.target.id === id) $(id).hidden = true; });
 	}
-};
+}
 
 // ---------- boot ----------
 
@@ -517,7 +664,10 @@ function consoleBoot() {
 		row.style.display = row.style.display === 'none' ? 'flex' : 'none';
 		if (row.style.display === 'flex') $('new-repo').focus();
 	};
-	resumeSession().then(() => { loadRepos(); loadRuns(); scheduleLiveRetry(); });
+	resumeSession().then(() => {
+		loadRepos();
+		scheduleLiveRetry();
+	});
 }
 
 // ---------- boot dispatch ----------
