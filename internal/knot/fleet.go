@@ -341,9 +341,15 @@ func (k *Knot) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := r.URL.Query().Get("repo")
-	rows, err := k.opt.DB.Query(
-		`SELECT id, branch, todo_title, status, summary, created_at, ended_at
-		 FROM knot_runs WHERE repo = ? ORDER BY created_at DESC LIMIT 50`, repo)
+	q := `SELECT id, branch, todo_title, status, summary, created_at, ended_at
+		 FROM knot_runs`
+	var args []any
+	if repo != "" {
+		q += ` WHERE repo = ?`
+		args = append(args, repo)
+	}
+	q += ` ORDER BY created_at DESC LIMIT 50`
+	rows, err := k.opt.DB.Query(q, args...)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 		return
