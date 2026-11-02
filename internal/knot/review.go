@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yieldenjoyoors/forgesi/internal/forgeci"
 	"github.com/yieldenjoyoors/forgesi/internal/gitrepo"
 )
 
@@ -18,8 +19,15 @@ proposed change (old vs new files) and write a short verdict for a human
 maintainer. Reply with 2-4 sentences: what the change does, whether it
 looks correct and complete, and anything to check before merging.`
 
+const reviewAutoSuffix = `
+This proposal may merge automatically when you do not object: if a human
+must look at it, begin your verdict with "BLOCK:". Otherwise describe the
+change and confirm it is correct and complete.`
+
 // reviewAsync triages a proposal. Runs in a goroutine: the HTTP response
-// to runDone never waits on the model.
+// to runDone never waits on the model. The repo's forgeci.json decides
+// whether a clear verdict ALSO auto-merges (agent review alone) or the
+// proposal waits for a human.
 func (k *Knot) reviewAsync(repo, ticketURI, ticketCID, base, head, summary string) {
 	if k.opt.ReviewLLM == nil {
 		return
@@ -31,17 +39,57 @@ func (k *Knot) reviewAsync(repo, ticketURI, ticketCID, base, head, summary strin
 			}
 		}()
 		gr := gitrepo.Repo{Be: k.be, RefPrefix: "git/" + repo + "/"}
+		dec := policyDecision(gr, base, head)
+		system := reviewSystem
+		if !dec.HumanRequired {
+			system += reviewAutoSuffix
+		}
 		prompt, err := diffSummary(gr, base, head)
 		if err != nil {
 			prompt = fmt.Sprintf("Proposal summary: %s\n(diff unavailable: %v)", summary, err)
 		}
-		verdict, err := k.opt.ReviewLLM(reviewSystem,
+		prompt += "\n\nReview policy: " + dec.Reason
+		verdict, err := k.opt.ReviewLLM(system,
 			fmt.Sprintf("Proposal: %s\n\n%s", summary, prompt))
 		if err != nil {
 			verdict = fmt.Sprintf("⚠️ reviewer unavailable: %v", err)
 		}
 		k.postComment(repo, ticketURI, ticketCID, verdict, "did:web:"+k.opt.Host+":reviewer")
+
+		// the agent-reviewed path: policy clears it and the reviewer did
+		// not object — merge now, flip the todo line, say so.
+		if err == nil && !dec.HumanRequired && !strings.HasPrefix(strings.TrimSpace(verdict), "BLOCK") {
+			k.autoMerge(repo, ticketURI, ticketCID, base, head, dec)
+		} else if err == nil && dec.HumanRequired {
+			k.postComment(repo, ticketURI, ticketCID,
+				"⏳ forgeci policy: human approval required — "+dec.Reason,
+				"did:web:"+k.opt.Host+":reviewer")
+		}
 	})
+}
+
+// autoMerge lands the proposal on main under the knot's own authority
+// and completes the todo line via the ticket. Failure is a comment,
+// never a panic — conflicts mean re-run the agent.
+func (k *Knot) autoMerge(repo, ticketURI, ticketCID, base, head string, dec forgeci.Decision) {
+	_ = base // the merge targets current main, matching handleMerge's default
+	rkey := strings.TrimPrefix(ticketURI, "at://"+repo+"/org.tangled.track.ticket/")
+	gr := k.gitrepoRepo(repo)
+	commit, ff, err := mergeRepo(gr, "main", head)
+	if err != nil {
+		k.postComment(repo, ticketURI, ticketCID,
+			"⚠️ auto-merge failed: "+err.Error(), "did:web:"+k.opt.Host+":reviewer")
+		return
+	}
+	editor := k.selfDID()
+	k.emit(repo, "commit", "", "refs/heads/main", commit, commit,
+		map[string]any{"merge": head, "editor": editor, "auto": true})
+	k.completeTodoOnMerge(repo, rkey, editor)
+	note := "🤖 auto-merged " + commit[:8]
+	if ff {
+		note += " (fast-forward)"
+	}
+	k.postComment(repo, ticketURI, ticketCID, note+" — forgeci policy: "+dec.Reason, editor)
 }
 
 // diffSummary renders old/new content for every file that changed between

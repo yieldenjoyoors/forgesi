@@ -129,7 +129,10 @@ func (k *Knot) wakeRunner(req RunRequest) {
 	if k.opt.RunnerURL == "" || k.opt.RunnerKey == "" {
 		return
 	}
-	go func() {
+	// the POST must outlive the request that triggered it — a raw
+	// goroutine is killed when the handler returns (the worker kills
+	// non-awaited work), so run it under the waitUntil hook.
+	waitUntilHook(func() {
 		defer func() { _ = recover() }()
 		payload, _ := json.Marshal(req)
 		httpReq, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(k.opt.RunnerURL, "/")+"/run", bytes.NewReader(payload))
@@ -143,7 +146,7 @@ func (k *Knot) wakeRunner(req RunRequest) {
 			return
 		}
 		_ = res.Body.Close()
-	}()
+	})
 }
 
 func (k *Knot) hasRunningRun(repo string) bool {

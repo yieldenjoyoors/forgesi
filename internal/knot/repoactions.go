@@ -152,6 +152,21 @@ func (k *Knot) handleMerge(w http.ResponseWriter, r *http.Request) {
 			head = oid
 		}
 	}
+	// forgeci.json gate: fleet-identity merges (the knot acting on its
+	// own authority) must be cleared by the repo's review policy; humans
+	// pass — their merge IS the approval.
+	if k.isFleetEditor(editor) {
+		baseAt := body.Base
+		if len(baseAt) != 40 {
+			if oid, ok, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/" + strings.TrimPrefix(baseAt, "refs/heads/")); ok {
+				baseAt = oid
+			}
+		}
+		if dec := policyDecision(gr, baseAt, head); dec.HumanRequired {
+			writeErr(w, http.StatusForbidden, "HumanApprovalRequired", "forgeci: "+dec.Reason)
+			return
+		}
+	}
 	commit, ff, err := mergeRepo(gr, body.Base, head)
 	if err != nil {
 		if strings.Contains(err.Error(), "conflicts") {

@@ -162,8 +162,13 @@ func TestFleetLoopMergeCompletesTodo(t *testing.T) {
 	repo := "did:web:forgesi.org:repo:loop"
 	editor, _ := atauth.Mint(key, "did:web:forgesi.org", repo, "", 60000000000, nowPlus(600))
 
-	// the work queue
+	// the work queue + fleet policy: the loop merges under its own authority
 	res := mustPOSTRaw(t, srv.URL, "/xrpc/org.tangled.repo.putFile",
+		`{"repo":"`+repo+`","path":"forgeci.json","content":"{\"review\":{\"default\":\"agent\"}}"}`, editor)
+	if res.code != 200 {
+		t.Fatalf("seed forgeci: %d %s", res.code, res.body)
+	}
+	res = mustPOSTRaw(t, srv.URL, "/xrpc/org.tangled.repo.putFile",
 		`{"repo":"`+repo+`","path":"todo.md","content":"- [ ] ship the loop test\n- [ ] never touched\n"}`, editor)
 	if res.code != 200 {
 		t.Fatalf("seed todo: %d %s", res.code, res.body)
