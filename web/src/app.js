@@ -27,6 +27,7 @@ const SCOPE = 'atproto repo:org.tangled.* rpc:com.atproto.server.getServiceAuth?
 
 let agent = null; // OAuthUserAgent when signed in
 let agentDID = null;
+let agentHandle = null; // resolved from the PDS once the session is live
 
 const didDocumentResolver = new CompositeDidDocumentResolver({
 	methods: {
@@ -125,9 +126,33 @@ async function resumeSession() {
 		const session = await getSession(did, { allowStale: true });
 		agent = new OAuthUserAgent(session);
 		agentDID = did;
+		resolveHandle();
 		setIdentity();
 	} catch {
 		sessionStorage.removeItem('forgesi-did');
+	}
+}
+
+// did -> handle: the PDS's getSession is canonical for a live session;
+// plc.directory's alsoKnownAs is the fallback.
+async function resolveHandle() {
+	if (!agent) return;
+	try {
+		const res = await agent.handle('/xrpc/com.atproto.server.getSession', { method: 'GET' });
+		if (res.ok) {
+			const j = await res.json();
+			if (j.handle) { agentHandle = j.handle; setIdentity(); return; }
+		}
+	} catch { /* fall through */ }
+	if (agentDID.startsWith('did:plc:')) {
+		try {
+			const res = await fetch('https://plc.directory/' + agentDID);
+			if (res.ok) {
+				const j = await res.json();
+				const aka = (j.alsoKnownAs || []).find((a) => String(a).startsWith('at://'));
+				if (aka) { agentHandle = String(aka).slice(4); setIdentity(); }
+			}
+		} catch { /* stay on the did */ }
 	}
 }
 
@@ -145,6 +170,7 @@ function signOut() {
 	if (agentDID) deleteStoredSession(agentDID);
 	agent = null;
 	agentDID = null;
+	agentHandle = null;
 	sessionStorage.removeItem('forgesi-did');
 	setIdentity();
 }
@@ -153,7 +179,7 @@ function setIdentity() {
 	const el = $('identity-btn');
 	if (!el) return;
 	if (agent) {
-		el.textContent = (agentDID || '').replace('did:plc:', '').replace('did:web:', '').slice(0, 18);
+		el.textContent = agentHandle ? '@' + agentHandle : agentDID;
 		el.className = 'ghost-pill mono';
 		el.title = agentDID || '';
 	} else {
@@ -172,7 +198,7 @@ function openAuth(why) {
 	$('auth-body').style.display = agent ? 'none' : 'flex';
 	if (agent) {
 		$('auth-session').style.display = 'block';
-		$('auth-did').textContent = agentDID;
+		$('auth-did').textContent = agentHandle ? '@' + agentHandle + ' · ' + agentDID : agentDID;
 	} else if (why) {
 		$('auth-err').className = 'why';
 		$('auth-err').textContent = why;
