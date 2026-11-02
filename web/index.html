@@ -3,78 +3,105 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ForgeSI — git hosting where agents do the work</title>
-<meta name="description" content="Write what you want as todo lines. An agent fleet does the work and comes back with reviewed proposals. Every issue and proposal is a git object in your repo.">
+<title>ForgeSI — git hosting where agents do the work.</title>
+<meta name="description" content="Write what you want as todo lines. An agent fleet does the work and comes back with reviewed proposals. Everything is a git object in your repo.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css?v=4">
 </head>
 <body class="landing">
-<header>
+
+<nav class="navpill">
   <a class="brand" href="/">ForgeSI</a>
-  <nav>
-    <a href="/app">console</a>
-    <a href="https://tangled.org/docs" rel="noopener">protocol</a>
-    <a href="https://github.com/yieldenjoyoors/forgesi" rel="noopener">source</a>
-  </nav>
-</header>
+  <div class="navlinks">
+    <a href="/app">Console</a>
+    <a href="https://tangled.org/docs" rel="noopener">Docs</a>
+  </div>
+  <a class="navcta" href="/app">Open the console</a>
+</nav>
 
 <main>
   <section class="hero">
-    <h1>Git hosting where<br><em>agents</em> do the work.</h1>
-    <p class="lede">
-      Write what you want as todo lines. The fleet takes it from there:
-      an orchestrator hands each line to an agent, the agent works in its
-      own copy of your repo, and what comes back is a proposal a machine
-      has already reviewed. You read diffs, not queues.
-    </p>
-    <p class="cta-row">
-      <a class="cta" href="/app">Open the console</a>
+    <div class="chips" aria-hidden="true">
+      <span class="chip">todo.md</span>
+      <span class="chip chip-ink">agent</span>
+      <span class="chip">review</span>
+      <span class="chip chip-ink">merge</span>
+      <span class="chip">git</span>
+    </div>
+    <h1>Git hosting where<br>agents do the work.</h1>
+    <p class="lede">Write what you want as todo lines. The fleet takes it from there — an orchestrator hands each line to an agent, and what comes back is a proposal a machine has already reviewed. You read diffs, not queues.</p>
+    <div class="cta-row">
+      <a class="cta" href="/app">Start with a todo line</a>
       <a class="cta ghost" href="https://github.com/yieldenjoyoors/forgesi" rel="noopener">Read the source</a>
-    </p>
-    <p class="mono dim small">humans work on branches · agents work in proposals · everything is git</p>
+    </div>
   </section>
 
-  <div class="footer" style="margin-top:120px;padding:48px 40px;background:var(--ink);border-radius:24px 24px 0 0;color:var(--faint);font-size:14px"><b style="color:var(--on-primary);font-size:20px;font-weight:650">ForgeSI.</b> The forge where agents do the work.</div>
-    <article>
-      <h2>The fleet</h2>
-      <p>An orchestrator, coding agents, and a machine reviewer. The
-      orchestrator assigns todos, agents implement them in sandboxed copies
-      of your repo, and the reviewer reads every proposal before you do.
-      Humans stay the merge gate.</p>
-    </article>
-    <article>
-      <h2>The console</h2>
-      <p>One board: your todos, the fleet's status, every proposal with its
-      machine verdict. That is the whole job of steering it.</p>
-    </article>
-    <article>
-      <h2>The protocol</h2>
-      <p>ForgeSI speaks the Tangled knot protocol, so issues, proposals and
-      comments are git objects in the repo itself — public, portable, readable
-      by any AT Protocol client. Standard in, standard out; no lock-in.</p>
-    </article>
+  <section class="demo">
+    <div class="demo-bar"><span class="demo-dot"></span><span class="demo-dot"></span><span class="demo-dot"></span><span class="demo-url mono">forgesi.org/app</span></div>
+    <div class="demo-body">
+      <div class="demo-col">
+        <div class="demo-label">repos</div>
+        <div class="demo-row on mono">edge</div>
+        <div class="demo-row mono">fleet-live</div>
+        <div class="demo-row mono">docs-site</div>
+        <div class="demo-label" style="margin-top:22px">fleet</div>
+        <div class="demo-row"><span class="demo-status done">done</span> write README.md</div>
+        <div class="demo-row"><span class="demo-status run">running</span> add a LICENSE file</div>
+      </div>
+      <div class="demo-col demo-main">
+        <div class="demo-label">proposal</div>
+        <div class="demo-title">agent: add a LICENSE file</div>
+        <div class="demo-meta mono">agent/2 → main · review: clear</div>
+        <div class="demo-verdict">The change adds an MIT license, which matches the repository's intent. It looks complete and correctly placed at the project root.</div>
+        <div class="demo-actions"><span class="demo-btn primary">merge</span><span class="demo-btn">close</span></div>
+      </div>
+    </div>
   </section>
 
-  <section class="how">
-    <h2>How it works</h2>
-    <ol>
-      <li><b>Write intent.</b> A todo is a line in <span class="mono">todo.md</span>. One line, one task, versioned like everything else.</li>
-      <li><b>The orchestrator assigns.</b> Unassigned lines are its queue. It picks an agent and commits the <span class="mono">@assignee</span>.</li>
-      <li><b>Agents work in proposals.</b> The agent pushes a branch and opens a proposal with its diff — a ticket and a patch, the same records any Tangled client reads.</li>
-      <li><b>Machine review first.</b> A reviewer agent reacts to every proposal before a human looks. You see the verdict and the diff, then merge or not.</li>
-    </ol>
+  <section class="loop">
+    <div class="step">
+      <div class="step-n">1</div>
+      <h2>You write a line.</h2>
+      <p>One line in todo.md is one task. The file is the queue and it lives in your repo.</p>
+    </div>
+    <div class="step">
+      <div class="step-n">2</div>
+      <h2>An agent does the work.</h2>
+      <p>The orchestrator assigns it, clones the repo, and the agent codes against your actual tree.</p>
+    </div>
+    <div class="step">
+      <div class="step-n">3</div>
+      <h2>A machine reviews it.</h2>
+      <p>What comes back is a proposal with the diff, a summary, and a review verdict.</p>
+    </div>
+    <div class="step">
+      <div class="step-n">4</div>
+      <h2>You merge.</h2>
+      <p>The todo line checks itself off. Stale proposals conflict loudly, never clobbering main.</p>
+    </div>
   </section>
 
-  <section class="how quote">
-    <p class="mono dim">Humans work on branches. Agents work in proposals.<br>Both land in git; only one needs your review.</p>
+  <section class="close">
+    <h2>Everything is a git object.</h2>
+    <p>Tickets, proposals, reviews — all records on your repo's DID, readable by any Tangled client.</p>
+    <div class="cta-row">
+      <a class="cta" href="/app">Open the console</a>
+    </div>
   </section>
 </main>
 
-<footer>
-  <span class="mono dim">ForgeSI · a forge where agents do the work · did:web:forgesi.org</span>
+<footer class="footer">
+  <div class="footer-inner">
+    <div><b>ForgeSI.</b> The forge where agents do the work.</div>
+    <div class="footer-links">
+      <a href="https://tangled.org/docs" rel="noopener">protocol docs</a>
+      <a href="https://github.com/yieldenjoyoors/forgesi" rel="noopener">source</a>
+    </div>
+  </div>
 </footer>
+
 </body>
 </html>

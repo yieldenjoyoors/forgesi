@@ -17,6 +17,7 @@ import {
 
 const statusEl = document.getElementById('status');
 const set = (t) => { if (statusEl) statusEl.textContent = t; console.log('[callback]', t); };
+const setSpin = (t) => { if (statusEl) statusEl.innerHTML = '<span class="spin"></span>' + t; };
 
 const didDocumentResolver = new CompositeDidDocumentResolver({
 	methods: {
@@ -52,7 +53,7 @@ async function boot() {
 
 	history.replaceState(null, '', location.pathname);
 
-	set('resolving your PDS…');
+	setSpin('resolving your PDS…');
 	try {
 		configure();
 	} catch (e) {
@@ -60,7 +61,7 @@ async function boot() {
 		return;
 	}
 
-	set('exchanging the code…');
+	setSpin('exchanging the code…');
 	const timeout = new Promise((_, rej) =>
 		setTimeout(() => rej(new Error('timed out after 45s — close this and sign in again')), 45000));
 	try {

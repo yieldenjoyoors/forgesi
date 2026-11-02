@@ -192,30 +192,35 @@ async function loadRuns() {
 
 let reposLoaded = false;
 async function loadRepos() {
-	if (!reposLoaded) $('repos').replaceChildren(skeletonRows(4, true));
+	const sel = $('repo-switch');
+	if (!reposLoaded) {
+		sel.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'loading…' }));
+	}
 	try {
 		const out = await xrpc('GET', '/org.tangled.repo.listRepos');
 		repos = out.repos || [];
-		$('repos').replaceChildren(...repos.map((r) => {
-			const el = document.createElement('div');
-			el.className = 'repoitem' + (current && current.did === r.did ? ' on' : '');
+		sel.replaceChildren(...repos.map((r) => {
+			const el = document.createElement('option');
+			el.value = r.did;
 			el.textContent = r.name;
-			el.onclick = () => openRepo(r);
 			return el;
 		}));
+		if (current) sel.value = current.did;
 		reposLoaded = true;
+		if (!current && repos.length) openRepo(repos[0]);
 	} catch (e) { log('listRepos: ' + e.message, 'err'); }
 }
 
 async function openRepo(r) {
 	current = r;
-	$('crumb-repo').textContent = r.name;
+	const sel = $('repo-switch');
+	if (sel.value !== r.did) sel.value = r.did;
+	$('repo-head').style.display = 'block';
 	$('repo-title').textContent = r.name;
 	$('repo-did').textContent = r.did;
 	$('ticket-form').style.display = 'flex';
-	$('tabs').style.display = 'flex';
+	setTab('tickets');
 	log('');
-	loadRepos();
 	loadRuns();
 	loadTodo();
 	$('tickets').replaceChildren(skeletonRows(3));
@@ -284,16 +289,17 @@ if (isConsole) $('save-todo').onclick = async () => {
 
 // ---------- console-only wiring (the callback page has no console DOM) ----------
 
-const isConsole = !!document.getElementById('repos');
+const isConsole = !!document.getElementById('repo-switch');
 
+function setTab(name) {
+	document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
+	for (const t of ['tickets', 'proposals', 'fleet', 'todo']) {
+		$('tab-' + t).style.display = t === name ? 'block' : 'none';
+	}
+	if (name === 'todo' && current) loadTodo();
+}
 if (isConsole) document.querySelectorAll('.tab').forEach((btn) => {
-	btn.onclick = () => {
-		document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b === btn));
-		for (const t of ['tickets', 'proposals', 'todo']) {
-			$('tab-' + t).style.display = btn.dataset.tab === t ? 'block' : 'none';
-		}
-		if (btn.dataset.tab === 'todo' && current) loadTodo();
-	};
+	btn.onclick = () => setTab(btn.dataset.tab);
 });
 
 function renderTicket(rec) {
@@ -404,7 +410,7 @@ async function pollLive() {
 			if (!box) break;
 			const el = document.createElement('div');
 			el.className = 'run';
-			el.innerHTML = `<span class="st done">•</span> <span class="mono" style="font-size:11px"></span>`;
+			el.innerHTML = `<span class="st done"></span> <span class="mono" style="font-size:11px"></span>`;
 			el.querySelector('.mono').textContent =
 				shortRepo(ev.repo) + ' ' + (ev.kind || 'commit') +
 				(ev.change ? ' ' + String(ev.change).slice(0, 7) : '');
@@ -436,6 +442,7 @@ if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () 
 	try {
 		const out = await knotFetch('POST', '/org.tangled.repo.createRepo', { name, defaultBranch: 'main' }, KNOT_DID, 'org.tangled.repo.createRepo');
 		$('new-repo').value = '';
+		$('new-repo-row').style.display = 'none';
 		log('repo created: ' + out.did, 'ok');
 		await loadRepos();
 		const r = repos.find((x) => x.did === out.did);
@@ -500,6 +507,16 @@ function callbackBoot() {
 }
 
 function consoleBoot() {
+	const sel = $('repo-switch');
+	sel.onchange = () => {
+		const r = repos.find((x) => x.did === sel.value);
+		if (r) openRepo(r);
+	};
+	const row = $('new-repo-row');
+	$('new-repo-btn').onclick = () => {
+		row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+		if (row.style.display === 'flex') $('new-repo').focus();
+	};
 	resumeSession().then(() => { loadRepos(); loadRuns(); scheduleLiveRetry(); });
 }
 

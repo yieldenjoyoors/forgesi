@@ -5,67 +5,78 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ForgeSI console</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css?v=4">
 </head>
 <body>
+
 <header class="appbar">
   <a class="brand" href="/">ForgeSI</a>
-  <span class="crumb">console · <b id="crumb-repo">repos</b></span>
-  <span class="mono" id="identity" style="margin-left:auto;font-size:11.5px"></span>
-  <form id="signin" style="display:flex;gap:6px;margin-left:8px">
-    <input type="text" id="handle" placeholder="you.bsky.social" style="width:180px">
+  <select id="repo-switch" class="pill-select"><option value="">repos…</option></select>
+  <button id="new-repo-btn" class="ghost-pill">+ new repo</button>
+  <span style="flex:1"></span>
+  <span id="identity" class="mono"></span>
+  <form id="signin">
+    <input type="text" id="handle" placeholder="you@example.com">
     <button type="submit">sign in</button>
   </form>
 </header>
 
-<div class="appmain">
-  <aside class="sidebar">
-    <h3>repos</h3>
-    <div class="repolist" id="repos"></div>
-    <h3 style="margin-top:22px">fleet</h3>
-    <div id="runs" class="runlist"><div class="empty">—</div></div>
-    <h3 style="margin-top:22px">live <span class="dot" id="live-dot"></span></h3>
-    <div id="live" class="runlist"><div class="empty">connecting…</div></div>
-    <h3 style="margin-top:22px">new repo</h3>
-    <div class="newform" style="flex-direction:column">
-      <input type="text" id="new-repo" placeholder="name" style="width:100%">
-      <button id="create-repo" style="width:100%">create</button>
-    </div>
-  </aside>
-
-  <main class="content" id="content">
-    <div class="toolbar">
-      <h1 id="repo-title">Pick a repo</h1>
-      <span class="did mono dim" id="repo-did"></span>
-    </div>
-    <div class="tabs" id="tabs" style="display:none">
-      <button class="tab on" data-tab="tickets">tickets</button>
-      <button class="tab" data-tab="proposals">proposals</button>
-      <button class="tab" data-tab="todo">todo.md</button>
-    </div>
-    <div id="tab-tickets">
-      <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
-      <div class="newform" id="ticket-form" style="display:none">
-        <input type="text" id="new-ticket" placeholder="describe the work — one line, one task" style="flex:1">
-        <button id="create-ticket">open ticket</button>
-      </div>
-    </div>
-    <div id="tab-proposals" style="display:none">
-      <div class="ticketlist" id="proposals"></div>
-    </div>
-    <div id="tab-todo" style="display:none">
-      <div class="newform" style="margin-bottom:8px">
-        <span class="mono dim" id="todo-status" style="align-self:center">—</span>
-        <button id="save-todo">save</button>
-      </div>
-      <textarea id="todo-editor" class="mono" spellcheck="false"></textarea>
-    </div>
-    <div class="flash" id="flash"></div>
-  </main>
+<div id="new-repo-row" class="newrepo-row" style="display:none">
+  <input type="text" id="new-repo" placeholder="new repo name">
+  <button id="create-repo">create repo</button>
 </div>
 
-<script type="module" src="/app.js"></script>
+<main class="repomain">
+  <div id="repo-head" style="display:none">
+    <h1 id="repo-title"></h1>
+    <div id="repo-did" class="did mono"></div>
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-tab="tickets">tickets</button>
+      <button class="tab" data-tab="proposals">proposals</button>
+      <button class="tab" data-tab="fleet">fleet</button>
+      <button class="tab" data-tab="todo">todo.md</button>
+    </div>
+  </div>
+
+  <section id="tab-tickets">
+    <div class="ticketlist" id="tickets"><div class="empty">No repo selected.</div></div>
+    <div class="newform" id="ticket-form" style="display:none">
+      <input type="text" id="new-ticket" placeholder="describe the work — one line, one task">
+      <button id="create-ticket">open ticket</button>
+    </div>
+  </section>
+
+  <section id="tab-proposals" style="display:none">
+    <div class="ticketlist" id="proposals"></div>
+  </section>
+
+  <section id="tab-fleet" style="display:none">
+    <div class="fleetgrid">
+      <div>
+        <div class="seclabel">runs</div>
+        <div id="runs" class="runlist"><div class="empty">—</div></div>
+      </div>
+      <div>
+        <div class="seclabel">live <span class="dot" id="live-dot"></span></div>
+        <div id="live" class="runlist"><div class="empty">connecting…</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-todo" style="display:none">
+    <div class="newform">
+      <span id="todo-status" class="mono dim">—</span>
+      <button id="save-todo">save</button>
+    </div>
+    <textarea id="todo-editor" class="mono" spellcheck="false"></textarea>
+  </section>
+
+  <div class="flash" id="flash"></div>
+</main>
+
+<script type="module" src="/app.js?v=4"></script>
 </body>
 </html>

@@ -4,12 +4,16 @@
 <meta charset="utf-8">
 <title>ForgeSI — signing in…</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css?v=4">
 </head>
-<body class="landing">
-<main style="padding:80px 24px;max-width:640px">
-  <p class="mono dim" id="status">finalizing sign-in…</p>
+<body class="callback-page">
+<main>
+  <a class="brand" href="/">ForgeSI</a>
+  <p id="status"><span class="spin"></span>finalizing sign-in…</p>
 </main>
-<script type="module" src="/callback.js"></script>
+<script type="module" src="/callback.js?v=4"></script>
 </body>
 </html>
