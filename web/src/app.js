@@ -232,21 +232,6 @@ async function openRepo(r) {
 	}
 }
 
-// ---------- console-only wiring (the callback page has no console DOM) ----------
-
-const isConsole = !!document.getElementById('repos');
-if (isConsole) {
-
-document.querySelectorAll('.tab').forEach((btn) => {
-	btn.onclick = () => {
-		document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b === btn));
-		for (const t of ['tickets', 'proposals', 'todo']) {
-			$('tab-' + t).style.display = btn.dataset.tab === t ? 'block' : 'none';
-		}
-		if (btn.dataset.tab === 'todo' && current) loadTodo();
-	};
-});
-
 // ---------- todo.md editor ----------
 
 let todoHead = null;
@@ -269,7 +254,7 @@ async function loadTodo() {
 	}
 }
 
-$('save-todo').onclick = async () => {
+if (isConsole) $('save-todo').onclick = async () => {
 	if (!current) return;
 	$('save-todo').disabled = true;
 	$('todo-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' saving' }));
@@ -295,6 +280,21 @@ $('save-todo').onclick = async () => {
 		$('save-todo').disabled = false;
 	}
 };
+
+
+// ---------- console-only wiring (the callback page has no console DOM) ----------
+
+const isConsole = !!document.getElementById('repos');
+
+if (isConsole) document.querySelectorAll('.tab').forEach((btn) => {
+	btn.onclick = () => {
+		document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b === btn));
+		for (const t of ['tickets', 'proposals', 'todo']) {
+			$('tab-' + t).style.display = btn.dataset.tab === t ? 'block' : 'none';
+		}
+		if (btn.dataset.tab === 'todo' && current) loadTodo();
+	};
+});
 
 function renderTicket(rec) {
 	const v = rec.value || {};
@@ -430,7 +430,7 @@ function shortRepo(did) {
 	return (did.split(':repo:')[1] || did).slice(0, 18);
 }
 
-$('create-repo').onclick = () => busy($('create-repo'), async () => {
+if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () => {
 	const name = $('new-repo').value.trim();
 	if (!name) return;
 	try {
@@ -443,7 +443,7 @@ $('create-repo').onclick = () => busy($('create-repo'), async () => {
 	} catch (e) { log(e.message, 'err'); }
 });
 
-$('create-ticket').onclick = () => busy($('create-ticket'), async () => {
+if (isConsole) $('create-ticket').onclick = () => busy($('create-ticket'), async () => {
 	const text = $('new-ticket').value.trim();
 	if (!text || !current) return;
 	try {
@@ -465,7 +465,7 @@ $('create-ticket').onclick = () => busy($('create-ticket'), async () => {
 
 // ---------- sign-in form ----------
 
-document.getElementById('signin').onsubmit = async (e) => {
+if (isConsole) document.getElementById('signin').onsubmit = async (e) => {
 	e.preventDefault();
 	const handle = document.getElementById('handle').value.trim();
 	if (!handle) return;
@@ -476,8 +476,6 @@ document.getElementById('signin').onsubmit = async (e) => {
 		log('sign-in failed: ' + (err.message || err), 'err');
 	}
 };
-
-}
 
 // ---------- boot ----------
 
@@ -503,4 +501,12 @@ function callbackBoot() {
 
 function consoleBoot() {
 	resumeSession().then(() => { loadRepos(); loadRuns(); scheduleLiveRetry(); });
+}
+
+// ---------- boot dispatch ----------
+
+if (location.pathname === '/oauth/callback/') {
+	callbackBoot();
+} else {
+	consoleBoot();
 }
