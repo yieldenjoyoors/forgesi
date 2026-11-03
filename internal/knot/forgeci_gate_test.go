@@ -1,7 +1,9 @@
 package knot
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -316,6 +318,64 @@ func TestOpenProposalAppendsPatchRounds(t *testing.T) {
 		"/xrpc/com.atproto.repo.listRecords?repo="+repo+"&collection=org.tangled.feed.comment&limit=50", nil))
 	if !strings.Contains(w.Body.String(), "round 2") {
 		t.Fatalf("round-2 comment missing: %s", w.Body.String())
+	}
+}
+
+// runDone records the agent's CI-lite checks; fleet.runs surfaces them.
+func TestRunDoneStoresChecks(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:cirun"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q}`, "cirun"); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+	gatePutFile(t, h, key, repo, "did:web:alice.example", "todo.md", "- [ ] do ci\n", "main")
+	time.Sleep(300 * time.Millisecond) // TryRun assigns
+
+	// find the running run
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/org.tangled.fleet.runs?repo="+repo, nil))
+	var runs struct {
+		Runs []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"runs"`
+	}
+	_ = json.NewDecoder(bytes.NewReader(w.Body.Bytes())).Decode(&runs)
+	if len(runs.Runs) == 0 {
+		t.Fatalf("no run assigned from todo.md")
+	}
+	runID := runs.Runs[0].ID
+
+	// the agent reports done + checks (no head: no proposal); runDone's
+	// service-auth path is knot-audience
+	tok := gateToken(t, key, repo, "did:web:"+gateHost)
+	w = gatePost(h, "/xrpc/org.tangled.fleet.runDone", tok, `{"runId":%q,"status":"done","summary":"ok","checks":[{"name":"go-syntax:main.go","ok":true},{"name":"json:cfg.json","ok":false,"detail":"invalid JSON"}]}`, runID)
+	if w.Code != 200 {
+		t.Fatalf("runDone: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/org.tangled.fleet.runs?repo="+repo, nil))
+	var after struct {
+		Runs []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Checks []struct {
+				Name string `json:"name"`
+				OK   bool   `json:"ok"`
+			} `json:"checks"`
+		} `json:"runs"`
+	}
+	_ = json.NewDecoder(bytes.NewReader(w.Body.Bytes())).Decode(&after)
+	if len(after.Runs) == 0 || len(after.Runs[0].Checks) != 2 {
+		t.Fatalf("checks not surfaced: %s", w.Body.String())
+	}
+	if after.Runs[0].Checks[1].OK {
+		t.Fatalf("failing check lost its ok=false")
 	}
 }
 

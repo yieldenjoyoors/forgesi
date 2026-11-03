@@ -30,7 +30,7 @@ func main() {
 		cloudflare.WaitUntil(func() {
 			defer func() {
 				if rec := recover(); rec != nil {
-					agent.Report(run.RunID, "failed", "panic", "", "", "")
+					agent.Report(run.RunID, "failed", "panic", "", "", "", nil)
 				}
 			}()
 			agent.Run(run)

@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"os"
@@ -346,7 +348,7 @@ func startServe() {
 			defer func() {
 				if rec := recover(); rec != nil {
 					log("run panicked:", rec)
-					Report(run.RunID, "failed", fmt.Sprintf("panic: %v", rec), "", "", "")
+					Report(run.RunID, "failed", fmt.Sprintf("panic: %v", rec), "", "", "", nil)
 				}
 			}()
 			runOne(run)
@@ -390,7 +392,7 @@ func runOne(run RunRequest) {
 
 	gr, base, files, err := clone(run.Repo)
 	if err != nil {
-		Report(run.RunID, "failed", "clone: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "clone: "+err.Error(), "", "", "", nil)
 		return
 	}
 	log("cloned", len(files), "files at", base[:min(8, len(base))])
@@ -411,7 +413,7 @@ func runOne(run RunRequest) {
 	for step := 0; step < 5; step++ {
 		done, summary, files, err = chat(prompt)
 		if err != nil {
-			Report(run.RunID, "failed", "llm: "+err.Error(), "", "", "")
+			Report(run.RunID, "failed", "llm: "+err.Error(), "", "", "", nil)
 			return
 		}
 		for p, c := range files {
@@ -423,14 +425,41 @@ func runOne(run RunRequest) {
 		prompt = "Continue the task. Reply with the JSON described."
 	}
 	if len(files) == 0 {
-		Report(run.RunID, "failed", "agent produced no changes", "", "", "")
+		Report(run.RunID, "failed", "agent produced no changes", "", "", "", nil)
 		return
+	}
+
+	// CI-lite: replicate the fast half of CI before proposing anything.
+	// Everything checkable without a toolchain is checked in-process
+	// (Go files must parse, JSON must be valid); failures go back to the
+	// model for a repair round. Only verified changes get pushed.
+	var checks []CheckResult
+	for attempt := 0; attempt < 3; attempt++ {
+		checks = verifyChanges(files, merged)
+		if checksOK(checks) {
+			break
+		}
+		if attempt == 2 {
+			Report(run.RunID, "failed", "checks failed after repairs:\n"+failedChecks(checks), "", "", "", checks)
+			return
+		}
+		log("checks failed — repair round", attempt+1)
+		_, _, fixed, err := chat("Your changes failed verification:\n" + failedChecks(checks) +
+			"\nFix the failing files. Reply with the JSON described.")
+		if err != nil {
+			Report(run.RunID, "failed", "llm (repair): "+err.Error(), "", "", "", checks)
+			return
+		}
+		for p, c := range fixed {
+			files[p] = c
+			merged[p] = c
+		}
 	}
 
 	// build the new tree+commit natively
 	treeOID, err := gr.WriteTreeFromFiles(merged)
 	if err != nil {
-		Report(run.RunID, "failed", "tree: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "tree: "+err.Error(), "", "", "", nil)
 		return
 	}
 	commitContent := gitrepo.EncodeCommit(gitrepo.CommitSpec{
@@ -440,26 +469,93 @@ func runOne(run RunRequest) {
 	})
 	newCommit, err := gr.StoreObject("commit", commitContent)
 	if err != nil {
-		Report(run.RunID, "failed", "commit: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "commit: "+err.Error(), "", "", "", nil)
 		return
 	}
 	if err := push(run.Repo, run.Branch, newCommit, run.Token, gr); err != nil {
-		Report(run.RunID, "failed", "push: "+err.Error(), "", "", "")
+		Report(run.RunID, "failed", "push: "+err.Error(), "", "", "", checks)
 		return
 	}
 	log("pushed", newCommit[:min(8, len(newCommit))])
-	Report(run.RunID, "done", summary, run.Branch, base, newCommit)
+	Report(run.RunID, "done", summary, run.Branch, base, newCommit, checks)
+}
+
+// CheckResult is one CI-style verification of the agent's changes.
+type CheckResult struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// verifyChanges replicates the fast half of CI in-process: anything
+// checkable without a toolchain is checked over the files the agent
+// touched (with their final merged content). Go files must parse;
+// JSON must be valid. Pure stdlib — runs in wasm.
+func verifyChanges(touched, merged map[string][]byte) []CheckResult {
+	paths := make([]string, 0, len(touched))
+	for p := range touched {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	var out []CheckResult
+	for _, p := range paths {
+		content, ok := merged[p]
+		if !ok {
+			content = touched[p]
+		}
+		switch {
+		case strings.HasSuffix(p, ".go"):
+			name := "go-syntax:" + p
+			fset := token.NewFileSet()
+			if _, err := parser.ParseFile(fset, p, content, parser.AllErrors); err != nil {
+				out = append(out, CheckResult{Name: name, OK: false, Detail: err.Error()})
+			} else {
+				out = append(out, CheckResult{Name: name, OK: true})
+			}
+		case strings.HasSuffix(p, ".json"):
+			name := "json:" + p
+			if json.Valid(content) {
+				out = append(out, CheckResult{Name: name, OK: true})
+			} else {
+				out = append(out, CheckResult{Name: name, OK: false, Detail: "invalid JSON"})
+			}
+		}
+	}
+	return out
+}
+
+func checksOK(checks []CheckResult) bool {
+	for _, c := range checks {
+		if !c.OK {
+			return false
+		}
+	}
+	return true
+}
+
+func failedChecks(checks []CheckResult) string {
+	var sb strings.Builder
+	for _, c := range checks {
+		if !c.OK {
+			fmt.Fprintf(&sb, "%s: %s\n", c.Name, c.Detail)
+		}
+	}
+	return sb.String()
 }
 
 // Report is the run callback to the knot (exported for the worker entry).
-func Report(runID, status, summary, branch, base, head string) {
+func Report(runID, status, summary, branch, base, head string, checks []CheckResult) {
 	if status != "done" {
 		log("run failed:", summary)
 	}
-	if err := xrpc(http.MethodPost, "/xrpc/org.tangled.fleet.runDone", map[string]any{
+	body := map[string]any{
 		"runId": runID, "status": status, "summary": summary,
 		"branch": branch, "base": base, "head": head,
-	}, runnerKey, nil); err != nil {
+	}
+	if len(checks) > 0 {
+		body["checks"] = checks
+	}
+	if err := xrpc(http.MethodPost, "/xrpc/org.tangled.fleet.runDone", body, runnerKey, nil); err != nil {
 		log("report:", err)
 	}
 }

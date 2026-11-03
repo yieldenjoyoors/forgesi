@@ -231,6 +231,11 @@ func (k *Knot) handleRunDone(w http.ResponseWriter, r *http.Request) {
 		Branch  string `json:"branch"`
 		Base    string `json:"base"`
 		Head    string `json:"head"`
+		Checks  []struct {
+			Name   string `json:"name"`
+			OK     bool   `json:"ok"`
+			Detail string `json:"detail,omitempty"`
+		} `json:"checks"` // CI-lite results the agent verified before proposing
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "InvalidRequest", err.Error())
@@ -239,8 +244,18 @@ func (k *Knot) handleRunDone(w http.ResponseWriter, r *http.Request) {
 	if body.Status == "" {
 		body.Status = "done"
 	}
+	var checksStr string
+	if len(body.Checks) > 0 {
+		if b, err := json.Marshal(body.Checks); err == nil {
+			checksStr = string(b)
+		}
+	}
 	_, _ = k.opt.DB.Exec(`UPDATE knot_runs SET status = ?, summary = ?, ended_at = ? WHERE id = ?`,
 		body.Status, body.Summary, time.Now().UTC().Format(time.RFC3339), body.RunID)
+	if checksStr != "" {
+		_, _ = k.opt.DB.Exec(`INSERT INTO knot_run_checks (run_id, checks) VALUES (?, ?)
+			ON CONFLICT(run_id) DO UPDATE SET checks = excluded.checks`, body.RunID, checksStr)
+	}
 
 	if body.Status == "done" && body.Head != "" {
 		// the proposal: a ticket with targetBranch + the patch record
@@ -398,11 +413,11 @@ func (k *Knot) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := r.URL.Query().Get("repo")
-	q := `SELECT id, branch, todo_title, status, summary, created_at, ended_at
-		 FROM knot_runs`
+	q := `SELECT r.id, r.branch, r.todo_title, r.status, r.summary, r.created_at, r.ended_at, c.checks
+		 FROM knot_runs r LEFT JOIN knot_run_checks c ON c.run_id = r.id`
 	var args []any
 	if repo != "" {
-		q += ` WHERE repo = ?`
+		q += ` WHERE r.repo = ?`
 		args = append(args, repo)
 	}
 	q += ` ORDER BY created_at DESC LIMIT 50`
@@ -414,6 +429,7 @@ func (k *Knot) handleRuns(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = rows.Close() }()
 	type runView struct {
 		ID, Branch, Title, Status, Summary, CreatedAt, EndedAt string
+		Checks                                                 sql.NullString
 	}
 	type jview struct {
 		ID        string `json:"id"`
@@ -423,14 +439,22 @@ func (k *Knot) handleRuns(w http.ResponseWriter, r *http.Request) {
 		Summary   string `json:"summary"`
 		CreatedAt string `json:"createdAt"`
 		EndedAt   string `json:"endedAt"`
+		Checks    any    `json:"checks,omitempty"`
 	}
 	out := []jview{}
 	for rows.Next() {
 		var v runView
-		if err := rows.Scan(&v.ID, &v.Branch, &v.Title, &v.Status, &v.Summary, &v.CreatedAt, &v.EndedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Branch, &v.Title, &v.Status, &v.Summary, &v.CreatedAt, &v.EndedAt, &v.Checks); err != nil {
 			continue
 		}
-		out = append(out, jview(v))
+		jv := jview{
+			ID: v.ID, Branch: v.Branch, Title: v.Title, Status: v.Status,
+			Summary: v.Summary, CreatedAt: v.CreatedAt, EndedAt: v.EndedAt,
+		}
+		if v.Checks.Valid && v.Checks.String != "" {
+			_ = json.Unmarshal([]byte(v.Checks.String), &jv.Checks)
+		}
+		out = append(out, jv)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
 }

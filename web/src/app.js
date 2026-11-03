@@ -430,6 +430,14 @@ function feedRunEl(r) {
 	meta.className = 'meta mono';
 	meta.textContent = r.branch || '';
 	el.appendChild(meta);
+	if (r.checks && r.checks.length) {
+		const bad = r.checks.filter((c) => !c.ok).length;
+		const pill = document.createElement('span');
+		pill.className = 'ci-pill' + (bad ? ' bad' : '');
+		pill.title = r.checks.map((c) => (c.ok ? '✓ ' : '✗ ') + c.name + (c.detail ? ': ' + c.detail : '')).join('\n');
+		pill.textContent = bad ? 'ci ✗' + bad : 'ci ✓' + r.checks.length;
+		el.appendChild(pill);
+	}
 	el.appendChild(Object.assign(document.createElement('span'), { className: 'flex' }));
 	const ago = document.createElement('span');
 	ago.className = 'ago small';
