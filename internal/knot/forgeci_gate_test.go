@@ -269,6 +269,56 @@ func TestCreateRepoWritesManifest(t *testing.T) {
 	}
 }
 
+// patch rounds: a resubmission of the same todo line appends a patch to
+// the open ticket instead of opening a duplicate (stacked-PR model).
+func TestOpenProposalAppendsPatchRounds(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:rounds"
+	alice := "did:web:alice.example"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q}`, "rounds"); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+	gatePutFile(t, h, key, repo, alice, "todo.md", "- [ ] fix the thing\n", "main")
+	time.Sleep(300 * time.Millisecond) // let the assignment land
+	gatePutFile(t, h, key, repo, alice, "fix.txt", "attempt one", "agent/1")
+
+	gr := h.gitrepoRepo(repo)
+	baseOID, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/main")
+	head1, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/agent/1")
+
+	h.openProposal(repo, "agent/1", baseOID, head1, "first attempt", "fix the thing")
+
+	// second attempt: new head on the same branch, same todo title
+	gatePutFile(t, h, key, repo, alice, "fix.txt", "attempt two", "agent/1")
+	head2, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/agent/1")
+	h.openProposal(repo, "agent/1", baseOID, head2, "second attempt", "fix the thing")
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/com.atproto.repo.listRecords?repo="+repo+"&collection=org.tangled.track.ticket&limit=50", nil))
+	tickets := strings.Count(w.Body.String(), `"org.tangled.track.ticket"`)
+	if tickets != 1 {
+		t.Fatalf("tickets = %d, want 1 (no duplicates across rounds)", tickets)
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/com.atproto.repo.listRecords?repo="+repo+"&collection=org.tangled.review.patch&limit=50", nil))
+	patches := strings.Count(w.Body.String(), `"org.tangled.review.patch"`)
+	if patches != 2 {
+		t.Fatalf("patches = %d, want 2 (one per round)", patches)
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/com.atproto.repo.listRecords?repo="+repo+"&collection=org.tangled.feed.comment&limit=50", nil))
+	if !strings.Contains(w.Body.String(), "round 2") {
+		t.Fatalf("round-2 comment missing: %s", w.Body.String())
+	}
+}
+
 func TestForgeciBlockVerdictHoldsAutoMerge(t *testing.T) {
 	verdicts := make(chan string, 4)
 	h, key := gateKnot(t, func(system, user string) (string, error) {

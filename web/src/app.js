@@ -47,6 +47,7 @@ let runItems = [];        // fleet runs (raw)
 let proposalRecs = [];    // ticket records with targetBranch
 let issueRecs = [];       // ticket records without targetBranch: the issues
 let issueComments = [];   // feed.comments, grouped per ticket by uri suffix
+let reactions = [];       // feed.reaction records, grouped per ticket
 let liveItems = [];       // {ts, text, title} firehose commits
 let streamFilter = 'all'; // all | proposals | issues
 let paneMode = 'activity';
@@ -213,6 +214,30 @@ function requireSession(why) {
 	if (agent) return Promise.resolve();
 	openAuth(why || 'sign in to continue');
 	return Promise.reject(new Error('auth-required'));
+}
+
+// attestation: the knot wrote the record in the repo account; this is
+// the author's countersignature in their own PDS, pointing at the exact
+// record version and the COB change behind it. Two-way verification,
+// best-effort — a failed attestation never fails the write.
+async function attest(res) {
+	if (!agent || !res || !res.uri || !res.cid) return;
+	try {
+		await agent.handle('/xrpc/com.atproto.repo.createRecord', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				repo: agentDID,
+				collection: 'org.tangled.graph.attestation',
+				record: {
+					$type: 'org.tangled.graph.attestation',
+					subject: { uri: res.uri, cid: res.cid },
+					change: res['x-tngl-change'],
+					createdAt: new Date().toISOString(),
+				},
+			}),
+		});
+	} catch { /* best effort */ }
 }
 
 // service-auth: mint a JWT at the PDS for the given audience/method,
@@ -450,6 +475,7 @@ async function feedProposalEl(rec) {
 	el.querySelector('.meta').textContent = `${v.targetBranch || ''} → main`;
 	if (verdictText) el.querySelector('.vt').textContent = verdictText;
 	const acts = el.querySelector('.acts');
+	acts.appendChild(reactBar(rkey));
 	if (closed) {
 		acts.appendChild(Object.assign(document.createElement('span'), { className: 'pstate', textContent: v.state }));
 	} else if (!agent) {
@@ -565,6 +591,7 @@ async function feedIssueEl(rec) {
 		box.appendChild(row);
 	}
 	const acts = el.querySelector('.icompose');
+	acts.appendChild(reactBar(rkey));
 	if (state === 'open') {
 		const input = document.createElement('input');
 		input.placeholder = agent ? 'comment…' : 'sign in to comment';
@@ -587,6 +614,7 @@ async function feedIssueEl(rec) {
 					},
 				}, current.did, 'com.atproto.repo.createRecord');
 				input.value = '';
+				attest(out);
 				loadTickets();
 			} catch (e) {
 				if (e.message !== 'auth-required') log('comment failed: ' + e.message, 'err');
@@ -617,7 +645,75 @@ async function loadTickets() {
 		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.feed.comment&limit=100`);
 		issueComments = out.records || [];
 	} catch { issueComments = []; }
+	try {
+		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.feed.reaction&limit=100`);
+		reactions = out.records || [];
+	} catch { reactions = []; }
 	renderStream();
+}
+
+// reactions on one ticket: emoji -> {count, mine (uri for delete)}
+function reactionsFor(rkey) {
+	const out = {};
+	for (const rec of reactions) {
+		const subj = (rec.value || {}).subject || {};
+		if (!subj.uri || !subj.uri.endsWith('/' + rkey)) continue;
+		const emoji = (rec.value || {}).reaction || '';
+		if (!emoji) continue;
+		const slot = out[emoji] || (out[emoji] = { count: 0, mine: null });
+		slot.count++;
+		if (rec.editor === agentDID) slot.mine = rec.uri;
+	}
+	return out;
+}
+
+const EMOJIS = ['👍', '❤️', '😄'];
+
+function reactBar(rkey) {
+	const bar = document.createElement('div');
+	bar.className = 'reacts';
+	const counts = reactionsFor(rkey);
+	for (const emoji of EMOJIS) {
+		const slot = counts[emoji];
+		const b = document.createElement('button');
+		b.className = 'react-btn' + (slot && slot.mine ? ' mine' : '');
+		b.textContent = emoji + (slot ? ' ' + slot.count : '');
+		b.title = agent ? 'react' : 'sign in to react';
+		b.onclick = () => {
+			if (!agent) { openAuth('sign in to react'); return; }
+			toggleReaction(rkey, emoji, slot);
+		};
+		bar.appendChild(b);
+	}
+	return bar;
+}
+
+async function toggleReaction(rkey, emoji, slot) {
+	try {
+		if (slot && slot.mine) {
+			const rkey2 = slot.mine.split('/').pop();
+			await knotFetch('POST', '/com.atproto.repo.deleteRecord', {
+				repo: current.did, collection: 'org.tangled.feed.reaction', rkey: rkey2,
+			}, current.did, 'com.atproto.repo.deleteRecord');
+		} else {
+			const ticket = [...issueRecs, ...proposalRecs].find((rec) => (rec.uri || '').endsWith('/' + rkey));
+			if (!ticket) return;
+			const out = await knotFetch('POST', '/com.atproto.repo.createRecord', {
+				repo: current.did,
+				collection: 'org.tangled.feed.reaction',
+				record: {
+					$type: 'org.tangled.feed.reaction',
+					subject: { uri: ticket.uri, cid: ticket.cid },
+					reaction: emoji,
+					createdAt: new Date().toISOString(),
+				},
+			}, current.did, 'com.atproto.repo.createRecord');
+			attest(out);
+		}
+		loadTickets();
+	} catch (e) {
+		if (e.message !== 'auth-required') log('reaction failed: ' + e.message, 'err');
+	}
 }
 
 // comments on one ticket (proposals and issues share the shape)
@@ -815,6 +911,7 @@ if (isConsole) {
 			$('issue-body').value = '';
 			im.hidden = true;
 			log('issue opened', 'ok');
+			attest(out);
 			loadTickets();
 		} catch (e) {
 			if (e.message !== 'auth-required') log('issue failed: ' + e.message, 'err');

@@ -254,37 +254,81 @@ func (k *Knot) handleRunDone(w http.ResponseWriter, r *http.Request) {
 }
 
 // openProposal writes the ticket and patch COBs (the Tangled PR shape).
+// A resubmission of the same todo line appends a patch ROUND to the
+// still-open ticket instead of opening a duplicate — the stacked-PR
+// model: one ticket, one patch record per attempt.
 func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string) {
 	if todoTitle == "" {
 		todoTitle = summary
 	}
 	editor := "did:web:" + k.opt.Host + ":orchestrator"
 	now := time.Now().UTC().Format(time.RFC3339)
-	ticket := map[string]any{
-		"$type":        "org.tangled.track.ticket",
-		"title":        map[string]any{"$type": "org.tangled.markup.markdown#inline", "text": "agent: " + todoTitle},
-		"body":         map[string]any{"$type": "org.tangled.markup.markdown", "text": summary},
-		"state":        "open",
-		"targetBranch": branchOf(base),
-		"createdAt":    now,
+
+	var tURI, tCID, tRkey string
+	round := 1
+	if recs, rkeys, err := k.store.ListRecords(repo, "org.tangled.track.ticket", 100, ""); err == nil {
+		for i, rec := range recs {
+			if i >= len(rkeys) {
+				break
+			}
+			v := rec.Value
+			if v["state"] != "open" {
+				continue
+			}
+			if _, isProposal := v["targetBranch"]; !isProposal {
+				continue // plain issues are not proposals
+			}
+			tm, _ := v["title"].(map[string]any)
+			if t, _ := tm["text"].(string); t == "agent: "+todoTitle {
+				tRkey = rkeys[i]
+				tURI = fmt.Sprintf("at://%s/org.tangled.track.ticket/%s", repo, tRkey)
+				tCID = rec.CID
+				break
+			}
+		}
 	}
-	w, err := k.store.Create(repo, "org.tangled.track.ticket", "", ticket, editor)
-	if err != nil {
-		return
+	if tURI != "" {
+		// existing open proposal: this run is its next round
+		if prs, _, err := k.store.ListRecords(repo, "org.tangled.review.patch", 100, ""); err == nil {
+			round = 1
+			for _, pr := range prs {
+				if tk, _ := pr.Value["ticket"].(string); tk == tRkey {
+					round++
+				}
+			}
+		}
+		k.postComment(repo, tURI, tCID, fmt.Sprintf("▶️ round %d: %s", round, summary), editor)
+	} else {
+		ticket := map[string]any{
+			"$type":        "org.tangled.track.ticket",
+			"title":        map[string]any{"$type": "org.tangled.markup.markdown#inline", "text": "agent: " + todoTitle},
+			"body":         map[string]any{"$type": "org.tangled.markup.markdown", "text": summary},
+			"state":        "open",
+			"targetBranch": branchOf(base),
+			"createdAt":    now,
+		}
+		w, err := k.store.Create(repo, "org.tangled.track.ticket", "", ticket, editor)
+		if err != nil {
+			return
+		}
+		tRkey = w.Rkey
+		tURI = w.URI()
+		tCID = w.CID
 	}
 	// machine review: verdict comment before a human looks
 	k.reviewAsync(repo,
-		fmt.Sprintf("at://%s/org.tangled.track.ticket/%s", repo, w.Rkey),
-		w.CID, base, head, todoTitle)
+		tURI,
+		tCID, base, head, todoTitle)
 	patch := map[string]any{
 		"$type":     "org.tangled.review.patch",
-		"ticket":    w.Rkey,
+		"ticket":    tRkey,
 		"base":      map[string]any{"$type": "org.tangled.git.oid", "oid": base},
 		"head":      map[string]any{"$type": "org.tangled.git.oid", "oid": head},
 		"createdAt": now,
 	}
 	_, _ = k.store.Create(repo, "org.tangled.review.patch", "", patch, editor)
-	k.emit(repo, "commit", "org.tangled.track.ticket", w.Rkey, w.CID, w.Change, ticket)
+	k.emit(repo, "commit", "org.tangled.review.patch", tRkey, tCID, "", patch)
+	k.emit(repo, "commit", "org.tangled.track.ticket", tRkey, tCID, "", map[string]any{"round": round})
 }
 
 // handleSubmitPatch accepts the standard wire shape too (parity with the
