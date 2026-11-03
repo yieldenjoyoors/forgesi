@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=8c">
+<link rel="stylesheet" href="/styles.css?v=8d">
 </head>
 <body>
 
@@ -144,6 +144,19 @@
   </div>
 </div>
 
+<!-- file edit sheet -->
+<div class="overlay" id="fedit-modal" hidden>
+  <div class="modal wide">
+    <div class="sheet-head">
+      <span class="panel-label" id="fedit-path">file</span>
+      <span class="flex"></span>
+      <span id="fedit-status" class="mono dim small">—</span>
+      <button id="fedit-save" class="ink-pill">save</button>
+    </div>
+    <textarea id="fedit-area" class="issue-body mono-area" spellcheck="false"></textarea>
+  </div>
+</div>
+
 <!-- commit sheet: one commit opened up -->
 <div class="overlay" id="commit-modal" hidden>
   <div class="modal wide">
@@ -170,6 +183,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=15"></script>
+<script type="module" src="/app.js?v=17"></script>
 </body>
 </html>

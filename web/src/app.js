@@ -917,6 +917,23 @@ async function feedIssueEl(rec) {
 	}
 	const acts = el.querySelector('.icompose');
 	acts.appendChild(reactBar(rkey));
+	const stateBtn = document.createElement('button');
+	stateBtn.className = 'act';
+	stateBtn.textContent = state === 'open' ? 'close issue' : 'reopen';
+	stateBtn.onclick = () => busy(stateBtn, async () => {
+		await requireSession(state === 'open' ? 'sign in to close' : 'sign in to reopen');
+		try {
+			const out = await knotFetch('POST', '/com.atproto.repo.putRecord', {
+				repo: current.did, collection: 'org.tangled.track.ticket', rkey,
+				record: { ...v, state: state === 'open' ? 'closed' : 'open' },
+			}, current.did, 'com.atproto.repo.putRecord');
+			attest(out);
+			loadTickets();
+		} catch (e) {
+			if (e.message !== 'auth-required') log('state change failed: ' + e.message, 'err');
+		}
+	});
+	acts.appendChild(stateBtn);
 	if (state === 'open') {
 		const input = document.createElement('input');
 		input.placeholder = agent ? 'comment…' : 'sign in to comment';
@@ -1076,17 +1093,50 @@ async function loadFiles(refresh) {
 	}
 }
 
+let fileHead = null; // the head the current file view was read at
+
 async function openFile(path) {
 	$('files-list').style.display = 'none';
 	const view = $('file-view');
 	view.style.display = 'block';
 	$('file-path').textContent = path;
 	$('file-content').textContent = 'loading…';
+	let editBtn = $('file-edit');
+	if (!editBtn) {
+		editBtn = document.createElement('button');
+		editBtn.id = 'file-edit';
+		editBtn.className = 'ghost-pill sm';
+		editBtn.textContent = 'edit';
+		editBtn.onclick = () => openFileEditor($('file-path').textContent);
+		$('file-back').after(editBtn);
+	}
 	try {
 		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path, ref: 'main' }, current.did, 'org.tangled.repo.getFile');
 		$('file-content').textContent = out.content;
+		fileHead = out.head;
 	} catch (e) {
 		$('file-content').textContent = 'failed: ' + e.message;
+		fileHead = null;
+	}
+}
+
+// the file sheet: edit one file on main with optimistic concurrency.
+async function openFileEditor(path) {
+	if (!current) return;
+	await requireSession('sign in to edit files');
+	const m = $('fedit-modal');
+	m.hidden = false;
+	$('fedit-path').textContent = path;
+	$('fedit-status').textContent = 'reading…';
+	$('fedit-area').value = '';
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path, ref: 'main' }, current.did, 'org.tangled.repo.getFile');
+		$('fedit-area').value = out.content;
+		fileHead = out.head;
+		$('fedit-status').textContent = 'at ' + String(out.head || '').slice(0, 8);
+		$('fedit-area').focus();
+	} catch (e) {
+		$('fedit-status').textContent = 'read failed: ' + e.message;
 	}
 }
 
@@ -1204,15 +1254,7 @@ if (isConsole) {
 	});
 	$('identity-btn').onclick = () => openAuth();
 	$('auth-cancel').onclick = closeAuth;
-	// pane switch: activity | files
-	function setPane(mode) {
-		paneMode = mode;
-		document.querySelectorAll('.segbtn').forEach((b) => b.classList.toggle('on', b.dataset.pane === mode));
-		$('pane-activity').style.display = mode === 'activity' ? 'block' : 'none';
-		$('pane-files').style.display = mode === 'files' ? 'block' : 'none';
-		if (mode === 'files') loadFiles();
-	}
-	window.__setPane = setPane;
+	// pane switch: module-scope setPane (hoisted)
 	document.querySelectorAll('.segbtn').forEach((b) => {
 		b.onclick = () => setPane(b.dataset.pane);
 	});
@@ -1281,8 +1323,38 @@ if (isConsole) {
 	$('auth-handle').onkeydown = (e) => { if (e.key === 'Enter') $('auth-go').click(); };
 	$('auth-out').onclick = () => { signOut(); closeAuth(); };
 	$('commit-close').onclick = () => { $('commit-modal').hidden = true; };
+	$('fedit-save').onclick = () => busy($('fedit-save'), async () => {
+		const path = $('fedit-path').textContent;
+		$('fedit-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' saving' }));
+		try {
+			const out = await knotFetch('POST', '/org.tangled.repo.putFile', {
+				repo: current.did, path,
+				content: $('fedit-area').value,
+				baseHead: fileHead || undefined,
+				branch: 'main',
+				msg: 'console: update ' + path,
+			}, current.did, 'org.tangled.repo.putFile');
+			fileHead = out.head;
+			$('fedit-status').textContent = 'saved ' + String(out.commit || '').slice(0, 8);
+			log(path + ' saved', 'ok');
+			setTimeout(() => { $('fedit-modal').hidden = true; }, 400);
+			if ($('pane-files').style.display !== 'none' && $('file-path').textContent === path) {
+				$('file-content').textContent = $('fedit-area').value;
+			}
+			filesLoaded = false; // tree may have changed
+		} catch (e) {
+			if (e.status === 409) {
+				$('fedit-status').textContent = 'changed underneath — reloading';
+				const fresh = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path, ref: 'main' }, current.did, 'org.tangled.repo.getFile');
+				fileHead = fresh.head;
+				$('fedit-area').value = fresh.content;
+			} else {
+				$('fedit-status').textContent = 'failed: ' + e.message;
+			}
+		}
+	});
 	// close overlays on backdrop click
-	for (const id of ['auth-modal', 'todo-modal', 'commit-modal']) {
+	for (const id of ['auth-modal', 'todo-modal', 'commit-modal', 'fedit-modal']) {
 		$(id).addEventListener('click', (e) => { if (e.target.id === id) $(id).hidden = true; });
 	}
 }

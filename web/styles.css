@@ -289,6 +289,7 @@ input::placeholder { color: var(--faint); }
 .icompose .act { height: 34px; padding: 0 14px; font-size: 13px; }
 
 .issue-form { display: flex; flex-direction: column; gap: 10px; }
+.mono-area { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; min-height: 320px; }
 .issue-body {
   background: var(--field); border: 2px solid transparent; border-radius: var(--r-sm);
   color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5;
