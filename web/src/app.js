@@ -353,8 +353,18 @@ async function xrpc(method, path, body) {
 // ---------- routing: /app (index) and /app/<owner-did>/<repo> ----------
 
 function repoPath(r) {
-	const owner = (ownerOf[r.did] && ownerOf[r.did].did) || 'did:web:' + location.host;
-	return '/app/' + encodeURIComponent(owner) + '/' + encodeURIComponent(r.name);
+	return '/app/' + encodeURIComponent(ownerLabel(r)) + '/' + encodeURIComponent(r.name);
+}
+
+// the readable owner: a domain for did:web, a handle for did:plc (when
+// resolved), the host while unknown. Repo names are unique per knot, so
+// the route lookup keys on the name; the owner segment is display.
+function ownerLabel(r) {
+	const owner = ownerOf[r.did];
+	const did = owner && owner.did;
+	if (did && did.startsWith('did:web:')) return did.replace('did:web:', '');
+	if (did) return handleCache[did] || did.replace('did:plc:', 'plc-');
+	return location.host;
 }
 
 function parseRoute() {
@@ -387,9 +397,9 @@ async function routeTo(push) {
 		return;
 	}
 	await loadRepos(false);
-	// owner in the URL should match the manifest's owner when it declares one
+	// keep the URL's owner segment canonical (handle/domain, not a did)
 	const owner = await loadOwner(r.did);
-	if (owner && owner.did !== route.owner) {
+	if (owner && owner.did && route.owner !== ownerLabel(r)) {
 		history.replaceState(null, '', repoPath(r));
 	}
 	openRepo(r);
@@ -453,6 +463,11 @@ async function openRepo(r) {
 	$('repo-title').textContent = r.name;
 	$('repo-did').textContent = r.did;
 	renderOwner(r.did);
+	const tgl = $('tangled-link');
+	if (tgl) {
+		tgl.href = 'https://tangled.org/' + r.did;
+		tgl.title = 'view ' + r.name + ' on tangled.org';
+	}
 	log('');
 	$('plan-list').replaceChildren(skeletonRows(4, true));
 	$('feed').replaceChildren(skeletonRows(3));
@@ -476,6 +491,16 @@ async function loadOwner(repoDID) {
 		const decl = (((rec || {}).value || {}).declaration) || {};
 		ownerOf[repoDID] = decl.owner ? { did: decl.owner } : null;
 	} catch { /* no manifest: knot-visible only */ }
+	if (ownerOf[repoDID]) {
+		const o = ownerOf[repoDID];
+		handleFor(o.did).then((h) => {
+			if (h && current && current.did === repoDID) {
+				// a resolved handle upgrades the URL and the chip in place
+				history.replaceState(null, '', repoPath(current));
+				renderOwner(repoDID);
+			}
+		});
+	}
 	return ownerOf[repoDID];
 }
 
