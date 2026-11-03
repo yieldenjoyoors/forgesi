@@ -209,7 +209,12 @@ input::placeholder { color: var(--faint); }
 .chipbtn:hover { background: var(--canvas-soft); color: var(--ink); }
 .chipbtn.on { background: var(--ink); color: var(--on-primary); }
 
-.repoline { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.repoline { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.owner-chip {
+  font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+  background: var(--canvas-soft); border-radius: var(--r-full);
+  padding: 3px 12px;
+}
 
 /* files pane */
 .files-list { display: flex; flex-direction: column; gap: 4px; }
@@ -329,7 +334,6 @@ input::placeholder { color: var(--faint); }
   margin-bottom: 6px;
 }
 
-.livechip { font-size: 12px; color: var(--muted); }
 
 .dot {
   width: 8px; height: 8px; border-radius: var(--r-full);

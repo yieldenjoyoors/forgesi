@@ -50,7 +50,6 @@ let issueComments = [];   // feed.comments, grouped per ticket by uri suffix
 let reactions = [];       // feed.reaction records, grouped per ticket
 let liveItems = [];       // {ts, text, title} firehose commits
 let streamFilter = 'all'; // all | proposals | issues
-let paneMode = 'activity';
 let filesLoaded = false;
 
 function spinEl(small) {
@@ -176,6 +175,15 @@ function signOut() {
 	setIdentity();
 }
 
+// activity | files pane switch (console only; element-guarded)
+function setPane(mode) {
+	if (!$('pane-activity')) return;
+	document.querySelectorAll('.segbtn').forEach((b) => b.classList.toggle('on', b.dataset.pane === mode));
+	$('pane-activity').style.display = mode === 'activity' ? 'block' : 'none';
+	$('pane-files').style.display = mode === 'files' ? 'block' : 'none';
+	if (mode === 'files') loadFiles();
+}
+
 function setIdentity() {
 	const el = $('identity-btn');
 	if (!el) return;
@@ -281,6 +289,8 @@ async function xrpc(method, path, body) {
 }
 
 let reposLoaded = false;
+let ownerOf = {};       // repoDID -> {did, handle?}
+let handleCache = {};   // did -> handle (plc.directory resolution)
 async function loadRepos() {
 	const sel = $('repo-switch');
 	if (!reposLoaded) {
@@ -311,13 +321,67 @@ async function openRepo(r) {
 	$('workspace').style.display = 'grid';
 	$('repo-title').textContent = r.name;
 	$('repo-did').textContent = r.did;
+	renderOwner(r.did);
 	log('');
 	$('plan-list').replaceChildren(skeletonRows(4, true));
 	$('feed').replaceChildren(skeletonRows(3));
 	loadTodo();
 	loadStream();
 	loadTickets();
-	if (window.__setPane) window.__setPane('activity');
+	setPane('activity');
+}
+
+// ---------- owner (from the repo manifest) ----------
+
+// The manifest/self record carries declaration {owner, name}; the owner
+// is who the repo belongs to (a user DID, or the knot itself for
+// API-created repos). Resolved to a handle when we can.
+async function loadOwner(repoDID) {
+	if (ownerOf[repoDID] !== undefined) return ownerOf[repoDID];
+	ownerOf[repoDID] = null;
+	try {
+		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(repoDID)}&collection=org.tangled.repo.manifest&limit=1`);
+		const rec = (out.records || []).find((x) => (x.uri || '').endsWith('/self'));
+		const decl = (((rec || {}).value || {}).declaration) || {};
+		ownerOf[repoDID] = decl.owner ? { did: decl.owner } : null;
+	} catch { /* no manifest: knot-visible only */ }
+	return ownerOf[repoDID];
+}
+
+async function handleFor(did) {
+	if (!did || handleCache[did] !== undefined) return handleCache[did];
+	handleCache[did] = null;
+	if (did.startsWith('did:plc:')) {
+		try {
+			const res = await fetch('https://plc.directory/' + did);
+			if (res.ok) {
+				const j = await res.json();
+				const aka = (j.alsoKnownAs || []).find((a) => String(a).startsWith('at://'));
+				if (aka) handleCache[did] = String(aka).slice(4);
+			}
+		} catch { /* stays null */ }
+	}
+	return handleCache[did];
+}
+
+function renderOwner(repoDID) {
+	const slot = $('repo-owner');
+	if (!slot) return;
+	slot.textContent = '';
+	loadOwner(repoDID).then(async (owner) => {
+		if (!owner) {
+			slot.hidden = true;
+			return;
+		}
+		slot.hidden = false;
+		slot.title = 'owner: ' + owner.did;
+		let label = owner.did.startsWith('did:web:')
+			? owner.did.replace('did:web:', '')
+			: owner.did;
+		const handle = await handleFor(owner.did);
+		if (handle) label = '@' + handle;
+		slot.textContent = label;
+	});
 }
 
 // ---------- the plan (todo.md) ----------
