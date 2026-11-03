@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -148,9 +149,16 @@ func (k *Knot) wakeRunner(req RunRequest) {
 		httpReq.Header.Set("Content-Type", "application/json")
 		res, err := outboundHTTP.Do(httpReq)
 		if err != nil {
+			fmt.Fprintln(os.Stderr, "wake: POST failed:", err)
 			return
 		}
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
 		_ = res.Body.Close()
+		if res.StatusCode >= 300 {
+			fmt.Fprintf(os.Stderr, "wake: runner answered %d: %s\n", res.StatusCode, body)
+			return
+		}
+		fmt.Fprintln(os.Stderr, "wake: runner accepted", req.RunID)
 	})
 }
 

@@ -1,6 +1,6 @@
-// Package llm is the knot's reviewer model client: OpenAI-compatible
-// chat completions over the Workers AI REST endpoint (CF_ACCOUNT_ID +
-// CLOUDFLARE_API_TOKEN), with a pluggable client for tests.
+// Package llm is the knot's reviewer model client: GLM over the zai
+// OpenAI-compatible endpoint (GLM_API_KEY), with a pluggable client for
+// tests. Same model family the fleet agent codes with.
 package llm
 
 import (
@@ -12,22 +12,29 @@ import (
 	"time"
 )
 
-// DefaultModel is small, fast, tuned for chat — reviewer verdicts and
-// short structured output.
-const DefaultModel = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+// Defaults mirror the agent's coding endpoint so reviewer and coder
+// speak the same model.
+const (
+	DefaultBaseURL = "https://api.z.ai/api/coding/paas/v4/chat/completions"
+	DefaultModel   = "glm-4.7"
+)
 
-// Client completes via Workers AI's OpenAI-compatible endpoint.
+// Client completes via GLM's OpenAI-compatible endpoint.
 type Client struct {
-	AccountID string
-	Token     string
-	Model     string
-	HTTP      *http.Client
+	APIKey  string
+	BaseURL string
+	Model   string
+	HTTP    *http.Client
 }
 
 // Complete runs one chat completion: system + user in, assistant text out.
 func (c *Client) Complete(system, user string) (string, error) {
-	if c.AccountID == "" || c.Token == "" {
-		return "", fmt.Errorf("llm: missing CF_ACCOUNT_ID or CLOUDFLARE_API_TOKEN")
+	if c.APIKey == "" {
+		return "", fmt.Errorf("llm: missing GLM_API_KEY")
+	}
+	url := c.BaseURL
+	if url == "" {
+		url = DefaultBaseURL
 	}
 	model := c.Model
 	if model == "" {
@@ -41,13 +48,12 @@ func (c *Client) Complete(system, user string) (string, error) {
 		},
 	}
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1/chat/completions", c.AccountID)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{Timeout: 90 * time.Second}
 	}
 	res, err := client.Do(req)
 	if err != nil {

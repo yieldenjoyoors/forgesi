@@ -57,9 +57,15 @@ func main() {
 	}
 	mintKey := loadMintKey()
 	var reviewLLM func(system, user string) (string, error)
-	if acct, tok := cloudflare.Getenv("CF_ACCOUNT_ID"), cloudflare.Getenv("CLOUDFLARE_API_TOKEN"); acct != "" && tok != "" {
-		// outbound calls in wasm need the fetch-backed transport
-		reviewLLM = (&llm.Client{AccountID: acct, Token: tok, HTTP: httpRuntime}).Complete
+	if key := cloudflare.Getenv("GLM_API_KEY"); key != "" {
+		// GLM reviews what GLM writes; outbound calls in wasm need the
+		// fetch-backed transport.
+		reviewLLM = (&llm.Client{
+			APIKey:  key,
+			BaseURL: envOr("LLM_BASE_URL", llm.DefaultBaseURL),
+			Model:   envOr("LLM_MODEL", llm.DefaultModel),
+			HTTP:    httpRuntime,
+		}).Complete
 	}
 	knotHandler = knot.New(knot.Options{
 		AppHTML:   forgesi.AppHTML,
