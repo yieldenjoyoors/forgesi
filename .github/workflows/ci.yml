@@ -20,8 +20,11 @@ jobs:
       - name: Gates
         run: |
           test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-          go vet ./...
-          go test ./...
+          # linux-buildable packages vet + test natively
+          go vet ./internal/... ./runner/agent/ ./runner/cmd/agent/
+          go test ./internal/... ./runner/agent/
+          # wasm-only packages typecheck under js
+          GOOS=js GOARCH=wasm go vet ./cmd/worker/ ./runner/cmd/worker/
 
       - name: Build wasm (the shippable artifact must compile)
         run: |

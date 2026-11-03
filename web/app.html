@@ -8,14 +8,16 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=7f">
+<link rel="stylesheet" href="/styles.css?v=8">
 </head>
 <body>
 
 <header class="appbar">
   <a class="brand" href="/">ForgeSI</a>
-  <select id="repo-switch" class="pill-select"><option value="">repos…</option></select>
-  <button id="new-repo-btn" class="ghost-pill">+ new repo</button>
+  <span class="crumbsepa mono dim2">/</span>
+  <a class="crumb" href="/app" id="crumb-repos">repos</a>
+  <span class="crumbsepa mono dim2" id="crumb-sep" hidden>/</span>
+  <a class="crumb strong" id="crumb-repo" hidden></a>
   <span class="spacer"></span>
   <button id="identity-btn" class="ghost-pill dim2">sign in</button>
 </header>
@@ -26,6 +28,15 @@
 </div>
 
 <main class="repomain">
+  <section id="repos-index" style="display:none">
+    <div class="panel-head">
+      <h1 class="index-title">Repositories</h1>
+      <span class="flex"></span>
+      <button id="new-repo-btn" class="ink-pill">new repo</button>
+    </div>
+    <div id="repos-list" class="files-list"></div>
+  </section>
+
   <div id="repo-head" style="display:none">
     <h1 id="repo-title"></h1>
     <div class="repoline">
@@ -89,7 +100,7 @@
 
 <footer class="appfoot">
   <div class="appfoot-inner">
-    <span>ForgeSI — git hosting where agents do the work.</span>
+    <span>ForgeSI — a Yield Enjoyoors project. Git hosting where agents do the work.</span>
     <span class="appfoot-links">
       <a href="https://github.com/yieldenjoyoors/forgesi" rel="noopener">source</a>
       <span class="mono dim2">did:web:forgesi.org</span>
@@ -146,6 +157,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=11"></script>
+<script type="module" src="/app.js?v=13"></script>
 </body>
 </html>

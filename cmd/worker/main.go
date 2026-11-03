@@ -22,6 +22,7 @@ import (
 	"github.com/syumai/workers-go/cloudflare/d1"
 	"github.com/syumai/workers-go/cloudflare/fetch"
 
+	"github.com/yieldenjoyoors/forgesi"
 	"github.com/yieldenjoyoors/forgesi/internal/atauth"
 	"github.com/yieldenjoyoors/forgesi/internal/knot"
 	"github.com/yieldenjoyoors/forgesi/internal/llm"
@@ -61,6 +62,7 @@ func main() {
 		reviewLLM = (&llm.Client{AccountID: acct, Token: tok, HTTP: httpRuntime}).Complete
 	}
 	knotHandler = knot.New(knot.Options{
+		AppHTML:   forgesi.AppHTML,
 		Host:      strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
 		Version:   envOr("KNOT_VERSION", "0.1.0"),
 		Auth:      auth,

@@ -35,6 +35,8 @@ type Options struct {
 	// set, repo DID documents carry its public half so standard service-auth
 	// verification accepts minted tokens.
 	MintKey *btcec.PrivateKey
+	// AppHTML is the console shell; set to serve SPA routes under /app/*.
+	AppHTML []byte
 	// Starter launches agent runs (the runner fetch in production). nil =
 	// pull mode: runners ask fleet.nextRun.
 	Starter func(run RunRequest) error
@@ -91,6 +93,7 @@ func New(opt Options) *Knot {
 	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.getFile", k.handleGetFile)
 	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.putFile", k.handlePutFile)
 	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.listFiles", k.handleListFiles)
+	k.mux.HandleFunc("POST /xrpc/org.tangled.repo.diff", k.handleDiff)
 	k.mux.HandleFunc("POST /xrpc/org.tangled.git.merge", k.handleMerge)
 	return k
 }
@@ -102,6 +105,16 @@ func (k *Knot) routes() {
 }
 
 func (k *Knot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// SPA routes (/app/<owner-did>/<repo>) serve the console shell here,
+	// before the mux — a catch-all pattern there would conflict with the
+	// git transport's /{did}/... wildcards.
+	if k.opt.AppHTML != nil && r.Method == http.MethodGet &&
+		strings.HasPrefix(r.URL.Path, "/app/") && len(r.URL.Path) > len("/app/") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(k.opt.AppHTML)
+		return
+	}
 	k.mux.ServeHTTP(w, r)
 }
 

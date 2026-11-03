@@ -48,6 +48,68 @@ let proposalRecs = [];    // ticket records with targetBranch
 let issueRecs = [];       // ticket records without targetBranch: the issues
 let issueComments = [];   // feed.comments, grouped per ticket by uri suffix
 let reactions = [];       // feed.reaction records, grouped per ticket
+let patchRecs = [];       // review.patch records: latest per ticket drives the diff view
+
+// the newest patch for a ticket (rounds append patches)
+function patchFor(rkey) {
+	let best = null, bestAt = '';
+	for (const rec of patchRecs) {
+		const v = rec.value || {};
+		if (v.ticket !== rkey) continue;
+		if (v.createdAt >= bestAt) { bestAt = v.createdAt; best = v; }
+	}
+	return best;
+}
+
+async function renderDiff(rec, host, btn) {
+	if (btn.dataset.open === '1') {
+		host.replaceChildren();
+		btn.dataset.open = '0';
+		btn.textContent = 'diff';
+		return;
+	}
+	const rkey = (rec.uri || '').split('/').pop();
+	const patch = patchFor(rkey);
+	if (!patch) {
+		host.replaceChildren(emptyEl('no patch record on this proposal'));
+		return;
+	}
+	const baseOid = ((patch.base || {}).oid) || '';
+	const headOid = ((patch.head || {}).oid) || '';
+	if (baseOid.length !== 40 || headOid.length !== 40) {
+		host.replaceChildren(emptyEl('patch carries no commit oids'));
+		return;
+	}
+	btn.dataset.open = '1';
+	btn.textContent = 'hide diff';
+	host.replaceChildren(spinEl(), Object.assign(document.createElement('span'), { className: 'dim-note', textContent: ' loading diff' }));
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.diff', {
+			repo: current.did, base: baseOid, head: headOid,
+		}, current.did, 'org.tangled.repo.diff');
+		const wrap = document.createElement('div');
+		wrap.className = 'diffwrap';
+		for (const f of out.files || []) {
+			const block = document.createElement('div');
+			block.className = 'diffblock';
+			const head = document.createElement('div');
+			head.className = 'diffhead';
+			head.textContent = f.status + ' · ' + f.path;
+			block.appendChild(head);
+			for (const ln of f.lines || []) {
+				const row = document.createElement('div');
+				row.className = 'diffrow ' + (ln.t === '+' ? 'add' : ln.t === '-' ? 'del' : 'ctx');
+				row.textContent = (ln.t === ' ' ? '  ' : ln.t + ' ') + ln.s;
+				block.appendChild(row);
+			}
+			wrap.appendChild(block);
+		}
+		if (!(out.files || []).length) wrap.appendChild(emptyEl('no changes'));
+		host.replaceChildren(wrap);
+	} catch (e) {
+		host.replaceChildren(emptyEl('diff failed: ' + e.message));
+	}
+}
 let liveItems = [];       // {ts, text, title} firehose commits
 let streamFilter = 'all'; // all | proposals | issues
 let filesLoaded = false;
@@ -288,35 +350,104 @@ async function xrpc(method, path, body) {
 	return json;
 }
 
+// ---------- routing: /app (index) and /app/<owner-did>/<repo> ----------
+
+function repoPath(r) {
+	const owner = (ownerOf[r.did] && ownerOf[r.did].did) || 'did:web:' + location.host;
+	return '/app/' + encodeURIComponent(owner) + '/' + encodeURIComponent(r.name);
+}
+
+function parseRoute() {
+	const parts = decodeURIComponent(location.pathname).replace(/^\/+/, '').split('/');
+	// ["app", ownerDid?, name?]
+	if (parts[0] !== 'app' || parts.length < 3 || !parts[2]) return null;
+	return { owner: parts[1], name: parts[2] };
+}
+
+function showIndex() {
+	current = null;
+	$('repo-head').style.display = 'none';
+	$('workspace').style.display = 'none';
+	$('repos-index').style.display = 'block';
+	$('crumb-repos').textContent = 'repos';
+	$('crumb-sep').hidden = true;
+	$('crumb-repo').hidden = true;
+	renderIndex();
+}
+
+async function routeTo(push) {
+	const route = parseRoute();
+	if (!route) {
+		showIndex();
+		return;
+	}
+	const r = repos.find((x) => x.name === route.name);
+	if (!r) {
+		showIndex();
+		return;
+	}
+	await loadRepos(false);
+	// owner in the URL should match the manifest's owner when it declares one
+	const owner = await loadOwner(r.did);
+	if (owner && owner.did !== route.owner) {
+		history.replaceState(null, '', repoPath(r));
+	}
+	openRepo(r);
+}
+
 let reposLoaded = false;
 let ownerOf = {};       // repoDID -> {did, handle?}
 let handleCache = {};   // did -> handle (plc.directory resolution)
-async function loadRepos() {
-	const sel = $('repo-switch');
-	if (!reposLoaded) {
-		sel.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'loading…' }));
-	}
+async function loadRepos(render) {
 	try {
 		const out = await xrpc('GET', '/org.tangled.repo.listRepos');
 		repos = out.repos || [];
-		sel.replaceChildren(...repos.map((r) => {
-			const el = document.createElement('option');
-			el.value = r.did;
-			el.textContent = r.name;
-			return el;
-		}));
-		if (current) sel.value = current.did;
 		reposLoaded = true;
-		if (!current && repos.length) openRepo(repos[0]);
+		if (render !== false) renderIndex();
 	} catch (e) { log('listRepos: ' + e.message, 'err'); }
+}
+
+// the index: every repo on the knot, owner-resolved
+function renderIndex() {
+	const box = $('repos-list');
+	if (!box) return;
+	if (!repos.length) {
+		box.replaceChildren(emptyEl('no repositories yet — create the first one'));
+		return;
+	}
+	box.replaceChildren(...repos.map((r) => {
+		const row = document.createElement('a');
+		row.className = 'filerow';
+		row.href = '#';
+		row.innerHTML = `<span class="ficon mono">·</span><span class="fname mono"></span><span class="flex"></span><span class="iowner mono dim small"></span>`;
+		row.querySelector('.fname').textContent = r.name;
+		loadOwner(r.did).then(async (owner) => {
+			const slot = row.querySelector('.iowner');
+			if (!owner) { slot.textContent = ''; return; }
+			slot.textContent = owner.did.startsWith('did:web:')
+				? owner.did.replace('did:web:', '')
+				: '@' + ((await handleFor(owner.did)) || owner.did.slice(0, 16));
+		});
+		row.onclick = (e) => {
+			e.preventDefault();
+			history.pushState(null, '', repoPath(r));
+			routeTo();
+		};
+		return row;
+	}));
 }
 
 async function openRepo(r) {
 	current = r;
 	liveItems = [];
 	filesLoaded = false;
-	const sel = $('repo-switch');
-	if (sel.value !== r.did) sel.value = r.did;
+	$('repos-index').style.display = 'none';
+	$('crumb-repos').textContent = 'repos';
+	$('crumb-sep').hidden = false;
+	const crumb = $('crumb-repo');
+	crumb.hidden = false;
+	crumb.textContent = r.name;
+	crumb.href = repoPath(r);
 	$('repo-head').style.display = 'block';
 	$('workspace').style.display = 'grid';
 	$('repo-title').textContent = r.name;
@@ -547,7 +678,14 @@ async function feedProposalEl(rec) {
 	el.querySelector('.meta').textContent = `${v.targetBranch || ''} → main`;
 	if (verdictText) el.querySelector('.vt').textContent = verdictText;
 	const acts = el.querySelector('.acts');
-	acts.appendChild(reactBar(rkey));
+	const diffBtn = document.createElement('button');
+	diffBtn.className = 'act';
+	diffBtn.textContent = 'diff';
+	const diffHost = document.createElement('div');
+	diffHost.className = 'diffhost';
+	diffBtn.onclick = () => renderDiff(rec, diffHost, diffBtn);
+	el.querySelector('.ticket-body').appendChild(diffHost);
+	acts.append(diffBtn, reactBar(rkey));
 	if (closed) {
 		acts.appendChild(Object.assign(document.createElement('span'), { className: 'pstate', textContent: v.state }));
 	} else if (!agent) {
@@ -721,6 +859,10 @@ async function loadTickets() {
 		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.feed.reaction&limit=100`);
 		reactions = out.records || [];
 	} catch { reactions = []; }
+	try {
+		const out = await xrpc('GET', `/com.atproto.repo.listRecords?repo=${encodeURIComponent(current.did)}&collection=org.tangled.review.patch&limit=100`);
+		patchRecs = out.records || [];
+	} catch { patchRecs = []; }
 	renderStream();
 }
 
@@ -870,7 +1012,7 @@ function shortRepo(did) {
 
 // ---------- console wiring (the callback page has none of this DOM) ----------
 
-const isConsole = !!document.getElementById('repo-switch');
+const isConsole = !!document.getElementById('repos-list');
 
 if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () => {
 	const name = $('new-repo').value.trim();
@@ -881,9 +1023,11 @@ if (isConsole) $('create-repo').onclick = () => busy($('create-repo'), async () 
 		$('new-repo').value = '';
 		$('new-repo-row').style.display = 'none';
 		log('repo created: ' + out.did, 'ok');
-		await loadRepos();
-		const r = repos.find((x) => x.did === out.did);
-		openRepo(r || { did: out.did, name });
+		await loadRepos(false);
+		const r = repos.find((x) => x.did === out.did) || { did: out.did, name };
+		ownerOf[r.did] = { did: agentDID || KNOT_DID };
+		history.pushState(null, '', repoPath(r));
+		openRepo(r);
 	} catch (e) { if (e.message !== 'auth-required') log(e.message, 'err'); }
 });
 
@@ -1039,18 +1183,20 @@ function callbackBoot() {
 }
 
 function consoleBoot() {
-	const sel = $('repo-switch');
-	sel.onchange = () => {
-		const r = repos.find((x) => x.did === sel.value);
-		if (r) openRepo(r);
-	};
 	const row = $('new-repo-row');
 	$('new-repo-btn').onclick = () => {
 		row.style.display = row.style.display === 'none' ? 'flex' : 'none';
 		if (row.style.display === 'flex') $('new-repo').focus();
 	};
-	resumeSession().then(() => {
-		loadRepos();
+	$('crumb-repos').onclick = (e) => {
+		e.preventDefault();
+		history.pushState(null, '', '/app');
+		showIndex();
+	};
+	window.addEventListener('popstate', () => routeTo());
+	resumeSession().then(async () => {
+		await loadRepos(false);
+		routeTo();
 		scheduleLiveRetry();
 	});
 }

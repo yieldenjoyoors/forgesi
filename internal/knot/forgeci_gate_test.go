@@ -379,6 +379,53 @@ func TestRunDoneStoresChecks(t *testing.T) {
 	}
 }
 
+// the diff endpoint: changed paths only, line-level LCS rows.
+func TestRepoDiff(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:diffy"
+	alice := "did:web:alice.example"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q}`, "diffy"); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+	gatePutFile(t, h, key, repo, alice, "readme.md", "line one\nline two\nline three\n", "main")
+	baseOID := func() string {
+		gr := h.gitrepoRepo(repo)
+		oid, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/main")
+		return oid
+	}()
+	gatePutFile(t, h, key, repo, alice, "readme.md", "line one\nline TWO changed\nline three\nline four\n", "agent/1")
+	gatePutFile(t, h, key, repo, alice, "new.go", "package x\n", "agent/1")
+	gr := h.gitrepoRepo(repo)
+	headOID, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/agent/1")
+
+	tok := gateToken(t, key, repo, repo)
+	w := gatePost(h, "/xrpc/org.tangled.repo.diff", tok,
+		`{"repo":%q,"base":%q,"head":%q}`, repo, baseOID, headOID)
+	if w.Code != 200 {
+		t.Fatalf("diff: %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"path":"new.go"`, `"status":"added"`, `"status":"modified"`,
+		`{"t":"-","s":"line two"}`, `{"t":"+","s":"line TWO changed"}`, `{"t":"+","s":"line four"}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("diff missing %s in %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"status":"removed"`) {
+		t.Errorf("unexpected removal: %s", body)
+	}
+
+	// bad input: branch names are rejected, oids required
+	w = gatePost(h, "/xrpc/org.tangled.repo.diff", tok, `{"repo":%q,"base":"main","head":"agent/1"}`, repo)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for branch names, got %d", w.Code)
+	}
+}
+
 func TestForgeciBlockVerdictHoldsAutoMerge(t *testing.T) {
 	verdicts := make(chan string, 4)
 	h, key := gateKnot(t, func(system, user string) (string, error) {
