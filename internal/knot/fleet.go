@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -133,7 +134,11 @@ func (k *Knot) wakeRunner(req RunRequest) {
 	// goroutine is killed when the handler returns (the worker kills
 	// non-awaited work), so run it under the waitUntil hook.
 	waitUntilHook(func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if rec := recover(); rec != nil {
+				fmt.Fprintf(os.Stderr, "wakeRunner panicked: %v\n%s", rec, debug.Stack())
+			}
+		}()
 		payload, _ := json.Marshal(req)
 		httpReq, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(k.opt.RunnerURL, "/")+"/run", bytes.NewReader(payload))
 		if err != nil {
@@ -332,8 +337,13 @@ func branchOf(base string) string {
 
 // TickInternal runs the orchestrator from the in-process cron caller.
 func (k *Knot) TickInternal() {
+	defer func() {
+		if rec := recover(); rec != nil {
+			fmt.Fprintf(os.Stderr, "cron tick panicked: %v\n%s", rec, debug.Stack())
+		}
+		k.opt.CronInternal = false
+	}()
 	k.opt.CronInternal = true
-	defer func() { k.opt.CronInternal = false }()
 	_ = k.tick()
 }
 

@@ -70,14 +70,15 @@ func main() {
 		RunnerURL: cloudflare.Getenv("RUNNER_URL"),
 		ReviewLLM: reviewLLM,
 	})
-	workers.Serve(knotHandler)
 	// The orchestrator heartbeat: cron-triggered (wrangler.jsonc triggers)
 	// and also reachable manually via the authed fleet.tick endpoint.
+	// Schedule BEFORE Serve — Serve blocks on Done() forever, and a task
+	// registered after it never lands (nil scheduledTask = cron panics).
 	cron.ScheduleTaskNonBlock(func(ctx context.Context) error {
 		knotHandler.TickInternal()
 		return nil
 	})
-	<-cron.Done()
+	workers.Serve(knotHandler)
 }
 
 // resolveDID fetches DID documents: did:web from the origin's
