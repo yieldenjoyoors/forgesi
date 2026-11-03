@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"io"
@@ -273,11 +274,11 @@ func push(repo, branch, newCommit, token string, gr gitrepo.Repo) error {
 }
 
 // chat runs one LLM step; the contract is the same JSON the harness used.
-func chat(prompt string) (done bool, summary string, files map[string][]byte, err error) {
+func chatSys(system, prompt string) (done bool, summary string, files map[string][]byte, err error) {
 	payload := map[string]any{
 		"model": llmModel,
 		"messages": []any{
-			map[string]any{"role": "system", "content": systemPrompt},
+			map[string]any{"role": "system", "content": system},
 			map[string]any{"role": "user", "content": prompt},
 		},
 	}
@@ -402,8 +403,10 @@ func runOne(run RunRequest) {
 		listing = append(listing, p)
 	}
 	sort.Strings(listing)
+	// the repo drives the agent: AGENTS.md, .agents/workflow.md, skills
+	ac := readAgentContext(files)
 	prompt := "Repository files:\n" + strings.Join(listing, "\n") +
-		"\n\nTask: " + run.TodoTitle + "\nDo the task. Reply with the JSON described."
+		"\n\nTask: " + ac.taskFor(run.TodoTitle) + "\nDo the task. Reply with the JSON described."
 
 	merged := map[string][]byte{}
 	for p, c := range files {
@@ -411,7 +414,7 @@ func runOne(run RunRequest) {
 	}
 	done, summary := false, ""
 	for step := 0; step < 5; step++ {
-		done, summary, files, err = chat(prompt)
+		done, summary, files, err = chatSys(ac.systemFor(), prompt)
 		if err != nil {
 			Report(run.RunID, "failed", "llm: "+err.Error(), "", "", "", nil)
 			return
@@ -444,8 +447,8 @@ func runOne(run RunRequest) {
 			return
 		}
 		log("checks failed — repair round", attempt+1)
-		_, _, fixed, err := chat("Your changes failed verification:\n" + failedChecks(checks) +
-			"\nFix the failing files. Reply with the JSON described.")
+		_, _, fixed, err := chatSys(ac.systemFor(), "Your changes failed verification:\n"+failedChecks(checks)+
+			"\nFix the failing files. Respect the repo instructions. Reply with the JSON described.")
 		if err != nil {
 			Report(run.RunID, "failed", "llm (repair): "+err.Error(), "", "", "", checks)
 			return
@@ -522,6 +525,30 @@ func verifyChanges(touched, merged map[string][]byte) []CheckResult {
 		}
 	}
 	return out
+}
+
+// gofmtAll formats every touched .go file into merged (and touched),
+// mirroring the repo's own `gofmt -w` CI gate. Unformattable files are
+// left for the parse check to report.
+func gofmtAll(touched, merged map[string][]byte) int {
+	n := 0
+	for p, c := range touched {
+		if !strings.HasSuffix(p, ".go") {
+			continue
+		}
+		content := c
+		if m, ok := merged[p]; ok {
+			content = m
+		}
+		formatted, err := format.Source(content)
+		if err != nil || string(formatted) == string(content) {
+			continue
+		}
+		merged[p] = formatted
+		touched[p] = formatted
+		n++
+	}
+	return n
 }
 
 func checksOK(checks []CheckResult) bool {
