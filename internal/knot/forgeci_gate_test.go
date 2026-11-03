@@ -426,6 +426,41 @@ func TestRepoDiff(t *testing.T) {
 	}
 }
 
+// commitInfo: message, parents, and the diff against the first parent.
+func TestCommitInfo(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:cinfo"
+	alice := "did:web:alice.example"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q}`, "cinfo"); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+	gatePutFile(t, h, key, repo, alice, "a.txt", "one\n", "main")
+	gr := h.gitrepoRepo(repo)
+	first, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/main")
+	gatePutFile(t, h, key, repo, alice, "a.txt", "one\ntwo\n", "main")
+	second, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/main")
+
+	tok := gateToken(t, key, repo, repo)
+	w := gatePost(h, "/xrpc/org.tangled.repo.commitInfo", tok, `{"repo":%q,"oid":%q}`, repo, second)
+	if w.Code != 200 {
+		t.Fatalf("commitInfo: %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{first, `"message":"Update a.txt"`, `{"t":"+","s":"two"}`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("commitInfo missing %s in %s", want, body)
+		}
+	}
+
+	// unknown oid: 404
+	w = gatePost(h, "/xrpc/org.tangled.repo.commitInfo", tok, `{"repo":%q,"oid":%q}`, repo, strings.Repeat("a", 40))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
 func TestForgeciBlockVerdictHoldsAutoMerge(t *testing.T) {
 	verdicts := make(chan string, 4)
 	h, key := gateKnot(t, func(system, user string) (string, error) {

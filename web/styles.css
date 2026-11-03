@@ -247,6 +247,22 @@ input::placeholder { color: var(--faint); }
   border-bottom: 1px solid var(--hairline-soft); margin-bottom: 6px;
 }
 
+.feedrow.clickable { cursor: pointer; }
+.feedrow.clickable:hover { border-color: var(--hairline); background: var(--canvas-soft); }
+.feedrow.recrow .fr-title { color: var(--faint); }
+.caret { font-size: 13px; }
+.rundetail {
+  display: none;
+  border: 1px solid var(--hairline-soft); border-top: none;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  margin-top: -6px; padding: 14px 18px;
+  background: var(--canvas-soft);
+}
+.runsummary { font-size: 13.5px; color: var(--ink-soft); line-height: 1.5; margin-bottom: 10px; }
+.runcheck { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.runcheck.ok { color: #1a7f37; }
+.runcheck.bad { color: var(--bad); }
+
 /* issues */
 .ticket.issue .ibody {
   margin-top: 8px; color: var(--muted); font-size: 13.5px; line-height: 1.45;

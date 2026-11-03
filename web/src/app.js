@@ -87,27 +87,52 @@ async function renderDiff(rec, host, btn) {
 		const out = await knotFetch('POST', '/org.tangled.repo.diff', {
 			repo: current.did, base: baseOid, head: headOid,
 		}, current.did, 'org.tangled.repo.diff');
-		const wrap = document.createElement('div');
-		wrap.className = 'diffwrap';
-		for (const f of out.files || []) {
-			const block = document.createElement('div');
-			block.className = 'diffblock';
-			const head = document.createElement('div');
-			head.className = 'diffhead';
-			head.textContent = f.status + ' · ' + f.path;
-			block.appendChild(head);
-			for (const ln of f.lines || []) {
-				const row = document.createElement('div');
-				row.className = 'diffrow ' + (ln.t === '+' ? 'add' : ln.t === '-' ? 'del' : 'ctx');
-				row.textContent = (ln.t === ' ' ? '  ' : ln.t + ' ') + ln.s;
-				block.appendChild(row);
-			}
-			wrap.appendChild(block);
-		}
-		if (!(out.files || []).length) wrap.appendChild(emptyEl('no changes'));
-		host.replaceChildren(wrap);
+		host.replaceChildren(renderDiffFiles(out.files));
 	} catch (e) {
 		host.replaceChildren(emptyEl('diff failed: ' + e.message));
+	}
+}
+
+// shared renderer: files -> colored diff blocks
+function renderDiffFiles(files) {
+	const wrap = document.createElement('div');
+	wrap.className = 'diffwrap';
+	for (const f of files || []) {
+		const block = document.createElement('div');
+		block.className = 'diffblock';
+		const head = document.createElement('div');
+		head.className = 'diffhead';
+		head.textContent = f.status + ' \u00b7 ' + f.path;
+		block.appendChild(head);
+		for (const ln of f.lines || []) {
+			const row = document.createElement('div');
+			row.className = 'diffrow ' + (ln.t === '+' ? 'add' : ln.t === '-' ? 'del' : 'ctx');
+			row.textContent = (ln.t === ' ' ? '  ' : ln.t + ' ') + ln.s;
+			block.appendChild(row);
+		}
+		wrap.appendChild(block);
+	}
+	if (!(files || []).length) wrap.appendChild(emptyEl('no changes'));
+	return wrap;
+}
+
+// openCommit: one commit opened up — message, parents, the diff against
+// its first parent. Nothing in the feed stays a black box.
+async function openCommit(oid) {
+	const m = $('commit-modal');
+	m.hidden = false;
+	$('commit-title').textContent = 'commit';
+	$('commit-meta').textContent = oid.slice(0, 8);
+	$('commit-diff').replaceChildren(spinEl(), Object.assign(document.createElement('span'), { className: 'dim-note', textContent: ' loading' }));
+	try {
+		const out = await knotFetch('POST', '/org.tangled.repo.commitInfo', {
+			repo: current.did, oid,
+		}, current.did, 'org.tangled.repo.commitInfo');
+		$('commit-title').textContent = out.message || '(no message)';
+		$('commit-meta').textContent = oid.slice(0, 8) + (out.parents && out.parents.length ? ' · from ' + out.parents[0].slice(0, 8) : ' · root');
+		$('commit-diff').replaceChildren(renderDiffFiles(out.files));
+	} catch (e) {
+		$('commit-diff').replaceChildren(emptyEl('commit: ' + e.message));
 	}
 }
 let liveItems = [];       // {ts, text, title} firehose commits
@@ -663,14 +688,76 @@ function feedRunEl(r) {
 	ago.className = 'ago small';
 	ago.textContent = timeago(r.createdAt || r.id);
 	el.appendChild(ago);
-	return el;
+	const caret = document.createElement('span');
+	caret.className = 'caret mono dim2';
+	caret.textContent = '+';
+	el.appendChild(caret);
+
+	// the run opened up: what the agent did, its checks, and the proposal
+	const detail = document.createElement('div');
+	detail.className = 'rundetail';
+	let open = false;
+	el.onclick = () => {
+		open = !open;
+		detail.style.display = open ? 'block' : 'none';
+		caret.textContent = open ? '\u2212' : '+';
+		if (open && !detail.childNodes.length) {
+			if (r.summary) {
+				const p = document.createElement('div');
+				p.className = 'runsummary';
+				p.textContent = r.summary;
+				detail.appendChild(p);
+			}
+			for (const c of r.checks || []) {
+				const row = document.createElement('div');
+				row.className = 'runcheck mono ' + (c.ok ? 'ok' : 'bad');
+				row.textContent = (c.ok ? '\u2713 ' : '\u2717 ') + c.name + (c.detail ? ' \u2014 ' + c.detail : '');
+				detail.appendChild(row);
+			}
+			const prop = proposalRecs.find((rec) => {
+				const t = ((rec.value || {}).title || {}).text || '';
+				return t.endsWith(r.title || '\u0000');
+			});
+			if (prop) {
+				const link = document.createElement('button');
+				link.className = 'act';
+				link.textContent = 'view proposal';
+				link.onclick = (e) => {
+					e.stopPropagation();
+					const card = document.body;
+					prop._scrollTo = true;
+					renderStream().then(() => {
+						const el2 = [...document.querySelectorAll('.ticket')].find((x) => x.textContent.includes((prop.value.title || {}).text || '\u0000'));
+						if (el2) {
+							el2.scrollIntoView({ behavior: 'smooth', block: 'center' });
+							const diffBtn = [...el2.querySelectorAll('button.act')].find((b) => b.textContent === 'diff');
+							if (diffBtn && diffBtn.dataset.open !== '1') diffBtn.click();
+						}
+					});
+				};
+				detail.appendChild(link);
+			}
+			if (!detail.childNodes.length) detail.appendChild(emptyEl('no details recorded'));
+		}
+	};
+	const wrap = document.createElement('div');
+	wrap.appendChild(el);
+	wrap.appendChild(detail);
+	return wrap;
 }
 
 function feedCommitEl(item) {
 	const el = document.createElement('div');
 	el.className = 'feedrow';
+	if (item.oid && item.oid.length === 40) {
+		el.className += ' clickable';
+		el.title = 'view this commit';
+		el.onclick = () => openCommit(item.oid);
+	} else if (item.oid === '') {
+		el.className += ' recrow';
+	}
 	const st = document.createElement('span');
-	st.className = 'st done';
+	st.className = 'st ' + (item.oid === '' ? 'closed' : 'done');
 	el.appendChild(st);
 	const t = document.createElement('span');
 	t.className = 'fr-title mono';
@@ -790,7 +877,10 @@ async function renderStream() {
 		for (const i of issueRecs) items.push(await feedIssueEl(i));
 	}
 	if (streamFilter === 'all') {
-		for (const r of runItems) items.push({ ts: runTs(r), el: feedRunEl(r) });
+		for (const r of runItems) {
+			const w = feedRunEl(r);
+			items.push({ ts: runTs(r), el: w });
+		}
 		for (const c of liveItems) items.push({ ts: c.ts, el: feedCommitEl(c) });
 	}
 	items.sort((a, b) => b.ts - a.ts);
@@ -1010,10 +1100,21 @@ async function pollLive() {
 		const events = out.events || [];
 		for (const ev of events) {
 			liveCursor = Math.max(liveCursor, ev.seq || 0);
-			liveItems.unshift({
-				ts: Date.now(),
-				text: shortRepo(ev.repo) + ' ' + (ev.kind || 'commit') + (ev.change ? ' ' + String(ev.change).slice(0, 7) : ''),
-			});
+			if (ev.collection) {
+				// a record write (comment, patch, manifest, ticket...)
+				liveItems.unshift({
+					ts: Date.now(),
+					text: shortRepo(ev.repo) + ' \u00b7 ' + String(ev.collection).split('.').pop(),
+					oid: '',
+				});
+			} else {
+				// a git push: the commit, clickable
+				liveItems.unshift({
+					ts: Date.now(),
+					text: shortRepo(ev.repo) + ' push ' + String(ev.cid || ev.change || '').slice(0, 8),
+					oid: ev.cid || (String(ev.change || '').length === 40 ? ev.change : ''),
+				});
+			}
 		}
 		if (events.length) {
 			liveItems = liveItems.slice(0, 12);
@@ -1179,8 +1280,9 @@ if (isConsole) {
 	});
 	$('auth-handle').onkeydown = (e) => { if (e.key === 'Enter') $('auth-go').click(); };
 	$('auth-out').onclick = () => { signOut(); closeAuth(); };
+	$('commit-close').onclick = () => { $('commit-modal').hidden = true; };
 	// close overlays on backdrop click
-	for (const id of ['auth-modal', 'todo-modal']) {
+	for (const id of ['auth-modal', 'todo-modal', 'commit-modal']) {
 		$(id).addEventListener('click', (e) => { if (e.target.id === id) $(id).hidden = true; });
 	}
 }

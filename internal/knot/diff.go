@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 )
 
 // diffLine is one output row: ' ', '+' or '-'.
@@ -110,21 +111,30 @@ func (k *Knot) handleDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "InvalidRequest", "base and head must be commit oids")
 		return
 	}
-	gr := k.gitrepoRepo(body.Repo)
-	paths, err := changedPaths(gr, body.Base, body.Head)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
+	files := treeDiff(k, body.Repo, body.Base, body.Head)
+	if files == nil {
+		writeErr(w, http.StatusInternalServerError, "InternalServerError", "diff failed")
 		return
 	}
-	oldFiles, err := gr.Materialize(body.Base)
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
+}
+
+// treeDiff materializes both commits and diffs every changed path.
+// nil means the diff could not be produced.
+func treeDiff(k *Knot, repoDID, base, head string) []diffFile {
+	gr := k.gitrepoRepo(repoDID)
+	paths, err := changedPaths(gr, base, head)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
-		return
+		return nil
 	}
-	newFiles, err := gr.Materialize(body.Head)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
-		return
+	var oldFiles, newFiles map[string][]byte
+	if base != "" {
+		if oldFiles, err = gr.Materialize(base); err != nil {
+			return nil
+		}
+	}
+	if newFiles, err = gr.Materialize(head); err != nil {
+		return nil
 	}
 	files := []diffFile{}
 	for _, p := range paths {
@@ -141,5 +151,69 @@ func (k *Knot) handleDiff(w http.ResponseWriter, r *http.Request) {
 		files = append(files, df)
 	}
 	sort.Slice(files, func(a, b int) bool { return files[a].Path < files[b].Path })
-	writeJSON(w, http.StatusOK, map[string]any{"files": files})
+	return files
+}
+
+// POST org.tangled.repo.commitInfo {repo, oid} -> {oid, message,
+// parents, files}: one commit opened up — its message and the diff
+// against its first parent (all-added for a root commit). The console's
+// clickable rows land here.
+func (k *Knot) handleCommitInfo(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Repo string `json:"repo"`
+		OID  string `json:"oid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", err.Error())
+		return
+	}
+	if _, ok := k.registry.byDID(body.Repo); !ok {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", "no such repo")
+		return
+	}
+	if len(body.OID) != 40 {
+		writeErr(w, http.StatusBadRequest, "InvalidRequest", "oid must be a commit id")
+		return
+	}
+	obj, err := k.gitrepoRepo(body.Repo).ReadObject(body.OID)
+	if err != nil || obj.Type != "commit" {
+		writeErr(w, http.StatusNotFound, "NotFound", "no such commit")
+		return
+	}
+	msg := commitMessage(obj.Data)
+	parents := commitParents(obj.Data)
+	base := ""
+	if len(parents) > 0 {
+		base = parents[0]
+	}
+	files := treeDiff(k, body.Repo, base, body.OID)
+	if files == nil {
+		files = []diffFile{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"oid": body.OID, "message": msg, "parents": parents, "files": files,
+	})
+}
+
+// git commit bodies: header lines, blank line, then the message.
+func commitMessage(data []byte) string {
+	parts := strings.SplitN(string(data), "\n\n", 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func commitParents(data []byte) []string {
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "parent ") {
+			out = append(out, strings.TrimPrefix(line, "parent "))
+			continue
+		}
+		if line == "" {
+			break
+		}
+	}
+	return out
 }

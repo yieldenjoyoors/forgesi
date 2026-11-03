@@ -93,13 +93,16 @@ func (k *Knot) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = rows.Close() }()
 	type outEvent struct {
-		Seq    int64  `json:"seq"`
-		Repo   string `json:"repo"`
-		Kind   string `json:"kind"`
-		Rev    string `json:"rev"`
-		Prev   string `json:"prev"`
-		Change string `json:"change"`
-		Frame  string `json:"frame"` // base64 atproto event-stream frame
+		Seq        int64  `json:"seq"`
+		Repo       string `json:"repo"`
+		Kind       string `json:"kind"`
+		Rev        string `json:"rev"`
+		Prev       string `json:"prev"`
+		Change     string `json:"change"`
+		Collection string `json:"collection,omitempty"` // set: a record write; empty: a git push
+		Rkey       string `json:"rkey,omitempty"`
+		CID        string `json:"cid,omitempty"` // the commit oid on git pushes
+		Frame      string `json:"frame"`         // base64 atproto event-stream frame
 	}
 	var out []outEvent
 	last := cursor
@@ -110,7 +113,7 @@ func (k *Knot) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 			return
 		}
-		oe := outEvent{Seq: e.Seq, Repo: e.Repo, Kind: e.Kind, Rev: e.Rev, Prev: e.PrevRev, Change: e.Change}
+		oe := outEvent{Seq: e.Seq, Repo: e.Repo, Kind: e.Kind, Rev: e.Rev, Prev: e.PrevRev, Change: e.Change, Collection: e.Collection, Rkey: e.Rkey, CID: e.CID}
 		if len(e.Record) > 0 {
 			rec, _, err := dagcbor.Decode(e.Record)
 			if err == nil {
