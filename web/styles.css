@@ -430,9 +430,6 @@ input::placeholder { color: var(--faint); }
   white-space: nowrap;
 }
 .navpill .brand { font-size: 17px; font-weight: 650; }
-.navlinks { display: flex; gap: 16px; font-size: 14px; font-weight: 600; margin-left: 8px; }
-.navlinks a { color: var(--ink); padding: 6px 12px; border-radius: var(--r-full); }
-.navlinks a:hover { background: rgba(255, 255, 255, 0.75); }
 .navcta {
   background: var(--ink); color: var(--on-primary);
   font-size: 14px; font-weight: 600;
@@ -577,7 +574,6 @@ input::placeholder { color: var(--faint); }
     gap: 10px; padding: 6px 6px 6px 16px;
     width: calc(100% - 24px); justify-content: space-between;
   }
-  .navlinks { display: none; }
   .landing main { padding-top: 96px; }
   .hero h1 { font-size: clamp(36px, 10.5vw, 48px); }
   .lede { font-size: 17px; margin: 20px 0 28px; }
