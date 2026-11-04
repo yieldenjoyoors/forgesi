@@ -289,6 +289,13 @@ input::placeholder { color: var(--faint); }
 .icompose .act { height: 34px; padding: 0 14px; font-size: 13px; }
 
 .issue-form { display: flex; flex-direction: column; gap: 10px; }
+.fedit-name {
+  background: var(--field); border: 2px solid transparent; border-radius: var(--r-sm);
+  color: var(--ink); font-size: 13px; padding: 7px 12px; outline: none; width: 320px; max-width: 50vw;
+}
+.fedit-name:focus { border-color: var(--ink); }
+.fedit-name[readonly] { opacity: 0.75; }
+
 .mono-area { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; min-height: 320px; }
 .issue-body {
   background: var(--field); border: 2px solid transparent; border-radius: var(--r-sm);

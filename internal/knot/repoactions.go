@@ -22,6 +22,7 @@ type fileBody struct {
 	BaseHead string `json:"baseHead"`
 	Branch   string `json:"branch"`
 	Msg      string `json:"msg"`
+	Delete   bool   `json:"delete"` // remove the path (nil content drops the tree entry)
 }
 
 type mergeBody struct {
@@ -114,14 +115,20 @@ func (k *Knot) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	if msg == "" {
 		msg = "Update " + body.Path
 	}
-	commit, err := gr.CommitFileOn(branch, body.BaseHead, body.Path, []byte(body.Content), msg, editor+" <"+editor+">")
+	var content []byte
+	if !body.Delete {
+		content = []byte(body.Content)
+	} else {
+		msg = "Delete " + body.Path
+	}
+	commit, err := gr.CommitFileOn(branch, body.BaseHead, body.Path, content, msg, editor+" <"+editor+">")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 		return
 	}
 	head, _, _ := gr.Be.RefHead(gr.RefPrefix + "refs/heads/" + branch)
 	k.emit(body.Repo, "commit", "", body.Path, commit, head, map[string]any{"path": body.Path})
-	if body.Path == "todo.md" && branch == "main" {
+	if body.Path == "todo.md" && branch == "main" && !body.Delete {
 		k.TryRun(body.Repo) // the queue changed — start work now
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"commit": commit, "head": head})

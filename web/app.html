@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=8d">
+<link rel="stylesheet" href="/styles.css?v=8e">
 </head>
 <body>
 
@@ -78,12 +78,18 @@
           <button class="chipbtn" data-f="proposals">proposals</button>
           <button class="chipbtn" data-f="issues">issues</button>
           <span class="flex"></span>
+          <button id="tick-btn" class="ghost-pill sm" title="assign open todo lines and wake the fleet now">run queue</button>
           <button id="new-issue-btn" class="ghost-pill sm">+ issue</button>
         </div>
         <div id="feed" class="feed"></div>
       </div>
 
       <div id="pane-files" style="display:none">
+        <div class="panel-head" style="padding-bottom:10px">
+          <span class="panel-label">files</span>
+          <span class="flex"></span>
+          <button id="new-file-btn" class="ghost-pill sm">+ new file</button>
+        </div>
         <div id="files-list" class="files-list"></div>
         <div id="file-view" class="file-view" style="display:none">
           <div class="file-view-head">
@@ -148,7 +154,7 @@
 <div class="overlay" id="fedit-modal" hidden>
   <div class="modal wide">
     <div class="sheet-head">
-      <span class="panel-label" id="fedit-path">file</span>
+      <input type="text" id="fedit-path" class="fedit-name mono" placeholder="path/to/file.md" spellcheck="false">
       <span class="flex"></span>
       <span id="fedit-status" class="mono dim small">—</span>
       <button id="fedit-save" class="ink-pill">save</button>
@@ -183,6 +189,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=17"></script>
+<script type="module" src="/app.js?v=18"></script>
 </body>
 </html>

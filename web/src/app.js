@@ -718,6 +718,21 @@ function feedRunEl(r) {
 				const t = ((rec.value || {}).title || {}).text || '';
 				return t.endsWith(r.title || '\u0000');
 			});
+			const retryBtn = document.createElement('button');
+			retryBtn.className = 'act';
+			retryBtn.textContent = 'retry run';
+			retryBtn.onclick = async (e) => {
+				e.stopPropagation();
+				if (!agent) { openAuth('sign in to retry runs'); return; }
+				try {
+					const out = await knotFetch('POST', '/xrpc/org.tangled.fleet.retry', { runId: r.id }, KNOT_DID, null);
+					log('requeued as ' + out.runId, 'ok');
+					loadStream();
+				} catch (err) {
+					log('retry failed: ' + err.message, 'err');
+				}
+			};
+			detail.appendChild(retryBtn);
 			if (prop) {
 				const link = document.createElement('button');
 				link.className = 'act';
@@ -1107,8 +1122,33 @@ async function openFile(path) {
 		editBtn.id = 'file-edit';
 		editBtn.className = 'ghost-pill sm';
 		editBtn.textContent = 'edit';
-		editBtn.onclick = () => openFileEditor($('file-path').textContent);
+		editBtn.onclick = () => openFileEditor($('file-path').textContent, false);
 		$('file-back').after(editBtn);
+	}
+	let delBtn = $('file-delete');
+	if (!delBtn) {
+		delBtn = document.createElement('button');
+		delBtn.id = 'file-delete';
+		delBtn.className = 'ghost-pill sm';
+		delBtn.textContent = 'delete';
+		delBtn.onclick = () => busy(delBtn, async () => {
+			if (!agent) { openAuth('sign in to delete files'); return; }
+			const path = $('file-path').textContent;
+			try {
+				await knotFetch('POST', '/org.tangled.repo.putFile', {
+					repo: current.did, path, delete: true, branch: 'main',
+					baseHead: fileHead || undefined,
+				}, current.did, 'org.tangled.repo.putFile');
+				log(path + ' deleted', 'ok');
+				filesLoaded = false;
+				$('file-view').style.display = 'none';
+				$('files-list').style.display = 'flex';
+				loadFiles(true);
+			} catch (e) {
+				log('delete failed: ' + e.message, 'err');
+			}
+		});
+		editBtn.after(delBtn);
 	}
 	try {
 		const out = await knotFetch('POST', '/org.tangled.repo.getFile', { repo: current.did, path, ref: 'main' }, current.did, 'org.tangled.repo.getFile');
@@ -1126,7 +1166,8 @@ async function openFileEditor(path) {
 	await requireSession('sign in to edit files');
 	const m = $('fedit-modal');
 	m.hidden = false;
-	$('fedit-path').textContent = path;
+	$('fedit-path').value = path;
+	$('fedit-path').readOnly = true;
 	$('fedit-status').textContent = 'reading…';
 	$('fedit-area').value = '';
 	try {
@@ -1323,8 +1364,19 @@ if (isConsole) {
 	$('auth-handle').onkeydown = (e) => { if (e.key === 'Enter') $('auth-go').click(); };
 	$('auth-out').onclick = () => { signOut(); closeAuth(); };
 	$('commit-close').onclick = () => { $('commit-modal').hidden = true; };
+	// the queue on demand: assign open todo lines + wake the fleet
+	$('tick-btn').onclick = () => busy($('tick-btn'), async () => {
+		if (!agent) { openAuth('sign in to run the queue'); return; }
+		try {
+			await knotFetch('POST', '/xrpc/org.tangled.fleet.tick', undefined, KNOT_DID, null);
+			log('queue ticked — the fleet is on it', 'ok');
+			loadStream();
+		} catch (e) { log('tick failed: ' + e.message, 'err'); }
+	});
+	$('new-file-btn').onclick = () => openFileEditor('', true);
 	$('fedit-save').onclick = () => busy($('fedit-save'), async () => {
-		const path = $('fedit-path').textContent;
+		const path = $('fedit-path').value.trim();
+		if (!path) { $('fedit-status').textContent = 'path required'; return; }
 		$('fedit-status').replaceChildren(spinEl(true), Object.assign(document.createElement('span'), { textContent: ' saving' }));
 		try {
 			const out = await knotFetch('POST', '/org.tangled.repo.putFile', {

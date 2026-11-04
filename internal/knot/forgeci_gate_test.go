@@ -461,6 +461,38 @@ func TestCommitInfo(t *testing.T) {
 	}
 }
 
+// putFile delete: the tree entry drops, listFiles stops showing it.
+func TestPutFileDelete(t *testing.T) {
+	h, key := gateKnot(t, nil)
+	repo := "did:web:" + gateHost + ":repo:del"
+	alice := "did:web:alice.example"
+
+	boot := gateToken(t, key, repo, "did:web:"+gateHost)
+	if w := gatePost(h, "/xrpc/org.tangled.repo.createRepo", boot, `{"name":%q}`, "del"); w.Code != 200 {
+		t.Fatalf("createRepo: %d %s", w.Code, w.Body.String())
+	}
+	gatePutFile(t, h, key, repo, alice, "doomed.md", "bye\n", "main")
+	gatePutFile(t, h, key, repo, alice, "keep.md", "hi\n", "main")
+
+	tok := gateToken(t, key, repo, repo)
+	w := gatePost(h, "/xrpc/org.tangled.repo.putFile", tok,
+		`{"repo":%q,"path":"doomed.md","delete":true,"branch":"main"}`, repo)
+	if w.Code != 200 {
+		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/xrpc/com.atproto.repo.listRecords?repo="+repo+"&collection=x", nil))
+	w = gatePost(h, "/xrpc/org.tangled.repo.listFiles", tok, `{"repo":%q}`, repo)
+	if strings.Contains(w.Body.String(), "doomed.md") {
+		t.Fatalf("doomed.md still listed: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "keep.md") {
+		t.Fatalf("keep.md vanished: %s", w.Body.String())
+	}
+}
+
 func TestForgeciBlockVerdictHoldsAutoMerge(t *testing.T) {
 	verdicts := make(chan string, 4)
 	h, key := gateKnot(t, func(system, user string) (string, error) {
