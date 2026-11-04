@@ -17,10 +17,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yieldenjoyoors/forgesi/internal/packfile"
 	"github.com/yieldenjoyoors/forgesi/internal/packline"
 )
 
-const apiBase = "https://api.cloudflare.com/client/v4/accounts"
+const defaultAPIBase = "https://api.cloudflare.com/client/v4/accounts"
+
+func (c Config) apiBase() string {
+	if c.RESTBase != "" {
+		return strings.TrimSuffix(c.RESTBase, "/") + "/accounts"
+	}
+	return defaultAPIBase
+}
 
 // Config resolves endpoints and credentials. APIToken is the account
 // API token (worker secret); tokens minted for git are repo-scoped and
@@ -30,6 +38,12 @@ type Config struct {
 	Namespace string
 	APIToken  string
 	HTTP      *http.Client
+	// GitBase overrides the data-plane origin (tests point it at a
+	// local server). Empty = the real Artifacts host.
+	GitBase string
+	// RESTBase overrides the control-plane origin (tests). Empty =
+	// api.cloudflare.com.
+	RESTBase string
 }
 
 // Client talks to one namespace.
@@ -46,12 +60,15 @@ func New(cfg Config) *Client {
 
 // GitURL is the repo's smart-HTTP remote.
 func (c *Client) GitURL(repo string) string {
+	if c.cfg.GitBase != "" {
+		return strings.TrimSuffix(c.cfg.GitBase, "/") + "/git/" + c.cfg.Namespace + "/" + repo + ".git"
+	}
 	return fmt.Sprintf("https://%s.artifacts.cloudflare.net/git/%s/%s.git",
 		c.cfg.AccountID, c.cfg.Namespace, repo)
 }
 
 func (c *Client) reposBase() string {
-	return fmt.Sprintf("%s/%s/artifacts/namespaces/%s/repos", apiBase, c.cfg.AccountID, c.cfg.Namespace)
+	return fmt.Sprintf("%s/%s/artifacts/namespaces/%s/repos", c.cfg.apiBase(), c.cfg.AccountID, c.cfg.Namespace)
 }
 
 func (c *Client) call(ctx context.Context, method, u string, body any) (int, map[string]any, error) {
@@ -116,7 +133,7 @@ func (c *Client) EnsureNamespace(ctx context.Context, jurisdiction string) error
 	if jurisdiction == "" {
 		jurisdiction = "eu"
 	}
-	u := fmt.Sprintf("%s/%s/artifacts/namespaces", apiBase, c.cfg.AccountID)
+	u := fmt.Sprintf("%s/%s/artifacts/namespaces", c.cfg.apiBase(), c.cfg.AccountID)
 	status, v, err := c.call(ctx, http.MethodPost, u, map[string]any{"namespace": c.cfg.Namespace, "jurisdiction": jurisdiction})
 	if err != nil {
 		return err
@@ -126,7 +143,7 @@ func (c *Client) EnsureNamespace(ctx context.Context, jurisdiction string) error
 	}
 	// already exists -> GET to confirm
 	status2, _, err := c.call(ctx, http.MethodGet,
-		fmt.Sprintf("%s/%s/artifacts/namespaces/%s", apiBase, c.cfg.AccountID, c.cfg.Namespace), nil)
+		fmt.Sprintf("%s/%s/artifacts/namespaces/%s", c.cfg.apiBase(), c.cfg.AccountID, c.cfg.Namespace), nil)
 	if err != nil {
 		return err
 	}
@@ -157,7 +174,7 @@ func (c *Client) EnsureRepo(ctx context.Context, name string) (bool, error) {
 
 // MintToken mints a repo-scoped git token ("read" or "write").
 func (c *Client) MintToken(ctx context.Context, repo, scope string, ttlSeconds uint64) (string, error) {
-	u := fmt.Sprintf("%s/%s/artifacts/namespaces/%s/tokens", apiBase, c.cfg.AccountID, c.cfg.Namespace)
+	u := fmt.Sprintf("%s/%s/artifacts/namespaces/%s/tokens", c.cfg.apiBase(), c.cfg.AccountID, c.cfg.Namespace)
 	status, v, err := c.call(ctx, http.MethodPost, u, map[string]any{
 		"scope": scope, "repo": repo, "ttl": ttlSeconds,
 	})
@@ -258,6 +275,72 @@ func (c *Client) Push(ctx context.Context, repo, token, oldOID, newOID, ref stri
 		return fmt.Errorf("push rejected: %s", raw[:min(len(raw), 300)])
 	}
 	return nil
+}
+
+// Fetch pulls the packs for the wanted oids (git protocol v2) and
+// decodes them into framed objects, ready for a Backend's cache.
+func (c *Client) Fetch(ctx context.Context, repo, token string, wants []string) (map[string][]byte, error) {
+	var req bytes.Buffer
+	req.Write(packline.Pkt("command=fetch\n"))
+	req.Write(packline.Pkt("agent=forgesi-knot/0.1\n"))
+	req.Write(packline.DelimPkt())
+	for _, w := range wants {
+		req.Write(packline.Pkt("want " + w + "\n"))
+	}
+	req.Write(packline.Pkt("done\n"))
+	req.Write(packline.FlushPkt())
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.GitURL(repo)+"/git-upload-pack", &req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	res, err := c.cfg.HTTP.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		return nil, fmt.Errorf("fetch %s: %d %s", repo, res.StatusCode, b)
+	}
+	pr := packline.NewReader(res.Body)
+	var pack bytes.Buffer
+	inPack := false
+	for {
+		payload, kind, err := pr.Next()
+		if err != nil || kind == "flush" {
+			if kind == "flush" && inPack {
+				break
+			}
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if kind != "data" {
+			continue
+		}
+		if !inPack && bytes.HasPrefix(payload, []byte("packfile")) {
+			inPack = true
+			continue
+		}
+		if inPack && len(payload) > 0 && payload[0] == 1 { // sideband ch1
+			pack.Write(payload[1:])
+		}
+	}
+	if pack.Len() == 0 {
+		return nil, fmt.Errorf("fetch %s: empty pack", repo)
+	}
+	objs, err := packfile.Decode(bytes.NewReader(pack.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: decode: %w", repo, err)
+	}
+	out := map[string][]byte{}
+	for _, o := range objs {
+		out[o.OID] = packfile.GitObject(packfile.TypeName(o.Type), o.Data)
+	}
+	return out, nil
 }
 
 func min(a, b int) int {
