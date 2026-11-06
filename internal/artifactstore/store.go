@@ -104,7 +104,10 @@ func (b *Backend) GetObject(oid string) ([]byte, error) {
 	if ok {
 		return framed, nil
 	}
-	if err := b.warm(); err != nil {
+	b.http.Lock()
+	err := b.warm()
+	b.http.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	b.mu.Lock()
@@ -117,9 +120,9 @@ func (b *Backend) GetObject(oid string) ([]byte, error) {
 }
 
 // warm fetches every head into the cache.
+// warm pulls every remote head's objects into the cache. The CALLER
+// must hold b.http (it round-trips the wire).
 func (b *Backend) warm() error {
-	b.http.Lock()
-	defer b.http.Unlock()
 	refs, err := b.lsRemote()
 	if err != nil {
 		return err
@@ -149,6 +152,43 @@ func (b *Backend) warm() error {
 		b.objects[oid] = framed
 	}
 	b.mu.Unlock()
+
+	// phase 2: COB envelope blobs sit OUTSIDE git reachability, so the
+	// server's head closures never carry them. Walk what we now hold,
+	// collect the envelope blobs the chains reference, and fetch those
+	// oids directly (the server stores every pushed object).
+	for round := 0; round < 4; round++ {
+		var missing []string
+		seen := map[string]bool{}
+		b.mu.Lock()
+		for _, framed := range b.objects {
+			typ, raw := splitFrame(framed)
+			if typ != "commit" {
+				continue
+			}
+			for _, blob := range envelopeBlobs(raw) {
+				if !seen[blob] {
+					seen[blob] = true
+					if b.objects[blob] == nil {
+						missing = append(missing, blob)
+					}
+				}
+			}
+		}
+		b.mu.Unlock()
+		if len(missing) == 0 {
+			return nil
+		}
+		objs, err := b.client.Fetch(context.Background(), b.repo, tok, missing)
+		if err != nil {
+			return fmt.Errorf("artifactstore warm blobs: %w", err)
+		}
+		b.mu.Lock()
+		for oid, framed := range objs {
+			b.objects[oid] = framed
+		}
+		b.mu.Unlock()
+	}
 	return nil
 }
 
@@ -180,6 +220,69 @@ func (b *Backend) RefHead(ref string) (string, bool, error) {
 	oid, ok := b.refs[ref]
 	b.mu.Unlock()
 	return oid, ok, nil
+}
+
+// SetRefs pushes several refs in one receive-pack: one reachability
+// walk over all tips, one pack, one round trip.
+func (b *Backend) SetRefs(updates map[string]string) error {
+	b.http.Lock()
+	defer b.http.Unlock()
+	// dedup the closure over every tip; missing objects -> warm once
+	var objs []packfile.Object
+	seen := map[string]bool{}
+	var missing error
+	for _, tip := range updates {
+		o, err := b.reachableFrom(tip, seen, &objs)
+		if err != nil {
+			missing = err
+			break
+		}
+		_ = o
+	}
+	if missing != nil {
+		if err := b.warm(); err != nil {
+			return err
+		}
+		objs = nil
+		seen = map[string]bool{}
+		for _, tip := range updates {
+			if _, err := b.reachableFrom(tip, seen, &objs); err != nil {
+				return fmt.Errorf("artifactstore setRefs: %w", err)
+			}
+		}
+	}
+	pack, err := packfile.Encode(objs)
+	if err != nil {
+		return err
+	}
+	tok, err := b.token("write")
+	if err != nil {
+		return err
+	}
+	// CAS: current remote oids become the expected olds; zeros for new
+	remote, _ := b.lsRemote()
+	current := map[string]string{}
+	for _, r := range remote {
+		current[r.Name] = r.OID
+	}
+	cmds := make([]artifacts.RefUpdate, 0, len(updates))
+	for ref, newOID := range updates {
+		old := current[ref]
+		if old == "" {
+			old = "0000000000000000000000000000000000000000"
+		}
+		cmds = append(cmds, artifacts.RefUpdate{Name: ref, Old: old, New: newOID})
+	}
+	if err := b.client.PushMany(context.Background(), b.repo, tok, cmds, pack); err != nil {
+		return fmt.Errorf("artifactstore setRefs: %w", err)
+	}
+	b.mu.Lock()
+	for ref, oid := range updates {
+		b.refs[ref] = oid
+		b.refAt[ref] = time.Now()
+	}
+	b.mu.Unlock()
+	return nil
 }
 
 // SetRef implements cob.Backend: push the ref update with every object
@@ -283,11 +386,33 @@ func commitField(raw []byte, field string) string {
 	return ""
 }
 
+// envelopeBlobs extracts record blob oids from a COB commit message
+// ("{\"blob\":\"<oid>\", ...}").
+func envelopeBlobs(commitRaw []byte) []string {
+	var out []string
+	for _, line := range strings.Split(string(commitRaw), "\n") {
+		if i := strings.Index(line, "{\"blob\":\""); i >= 0 {
+			rest := line[i+len("{\"blob\":\""):]
+			if j := strings.Index(rest, "\""); j == 40 {
+				out = append(out, rest[:40])
+			}
+		}
+	}
+	return out
+}
+
+// emptyTreeOID is git's well-known empty-tree object id.
+const emptyTreeOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 // reachable walks the closure from tip over cached objects (commits ->
 // parents + tree, trees -> subtrees + blobs) and returns pack objects.
 func (b *Backend) reachable(tip string) ([]packfile.Object, error) {
-	seen := map[string]bool{}
-	var out []packfile.Object
+	return b.reachableFrom(tip, map[string]bool{}, &[]packfile.Object{})
+}
+
+// reachableFrom walks the closure from tip into the caller's seen/out,
+// so several tips share one dedup set.
+func (b *Backend) reachableFrom(tip string, seen map[string]bool, out *[]packfile.Object) ([]packfile.Object, error) {
 	var visit func(oid string) error
 	visit = func(oid string) error {
 		if seen[oid] {
@@ -296,6 +421,10 @@ func (b *Backend) reachable(tip string) ([]packfile.Object, error) {
 		b.mu.Lock()
 		framed := b.objects[oid]
 		b.mu.Unlock()
+		if framed == nil && oid == emptyTreeOID {
+			// git's implicit empty tree: never stored, always valid
+			framed = []byte("tree 0\x00")
+		}
 		if framed == nil {
 			return fmt.Errorf("missing object %s in closure", oid)
 		}
@@ -304,11 +433,19 @@ func (b *Backend) reachable(tip string) ([]packfile.Object, error) {
 			return fmt.Errorf("bad frame at %s", oid)
 		}
 		seen[oid] = true
-		out = append(out, packfile.Object{Type: packfile.TypeOf(typ), Data: raw, OID: oid})
+		*out = append(*out, packfile.Object{Type: packfile.TypeOf(typ), Data: raw, OID: oid})
 		switch typ {
 		case "commit":
 			if t := commitField(raw, "tree"); t != "" {
 				if err := visit(t); err != nil {
+					return err
+				}
+			}
+			// COB commits carry the version envelope in the message
+			// with the record blob OUTSIDE the (empty) tree — git
+			// reachability never reaches it, but the chain does.
+			for _, b := range envelopeBlobs(raw) {
+				if err := visit(b); err != nil {
 					return err
 				}
 			}
@@ -334,5 +471,5 @@ func (b *Backend) reachable(tip string) ([]packfile.Object, error) {
 	if err := visit(tip); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return *out, nil
 }

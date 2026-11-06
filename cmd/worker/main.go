@@ -67,8 +67,18 @@ func main() {
 			HTTP:    httpRuntime,
 		}).Complete
 	}
+	// Per-repo Artifacts storage: set ARTIFACTS_NS (plus account id and
+	// API token) to make Cloudflare Artifacts the storage authority for
+	// git objects, refs and COBs. D1 keeps registry/events/runs.
+	var artCfg *knot.ArtifactsConfig
+	if ns := cloudflare.Getenv("ARTIFACTS_NS"); ns != "" {
+		if acct, tok := cloudflare.Getenv("CF_ACCOUNT_ID"), cloudflare.Getenv("CLOUDFLARE_API_TOKEN"); acct != "" && tok != "" {
+			artCfg = &knot.ArtifactsConfig{AccountID: acct, Namespace: ns, APIToken: tok}
+		}
+	}
 	knotHandler = knot.New(knot.Options{
 		AppHTML:   forgesi.AppHTML,
+		Artifacts: artCfg,
 		Host:      strings.TrimPrefix(strings.TrimPrefix(envOr("KNOT_HOST", "forgesi.org"), "https://"), "http://"),
 		Version:   envOr("KNOT_VERSION", "0.1.0"),
 		Auth:      auth,

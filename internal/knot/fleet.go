@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/yieldenjoyoors/forgesi/internal/atauth"
-	"github.com/yieldenjoyoors/forgesi/internal/gitrepo"
 	"github.com/yieldenjoyoors/forgesi/internal/todo"
 )
 
@@ -74,17 +73,20 @@ func (k *Knot) tickRepo(repo repoAccount) {
 	if k.opt.DB == nil || k.opt.MintKey == nil {
 		return
 	}
-	gr := gitrepo.Repo{Be: k.be, RefPrefix: "git/" + repo.Did + "/"}
+	gr := k.gitRepoFor(repo.Did)
 	content, err := gr.ReadFileAt("", "todo.md")
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "tick", repo.Name, "read todo:", err)
 		return // no todo.md yet
 	}
 	items := todo.Parse(string(content))
 	item, ok := todo.Pick(items)
 	if !ok {
+		fmt.Fprintln(os.Stderr, "tick", repo.Name, "nothing to pick")
 		return
 	}
 	if k.hasRunningRun(repo.Did) {
+		fmt.Fprintln(os.Stderr, "tick", repo.Name, "run already active")
 		return // one run per repo at a time
 	}
 	agent := "agent-1"
@@ -289,7 +291,7 @@ func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string)
 
 	var tURI, tCID, tRkey string
 	round := 1
-	if recs, rkeys, err := k.store.ListRecords(repo, "org.tangled.track.ticket", 100, ""); err == nil {
+	if recs, rkeys, err := k.storeFor(repo).ListRecords(repo, "org.tangled.track.ticket", 100, ""); err == nil {
 		for i, rec := range recs {
 			if i >= len(rkeys) {
 				break
@@ -312,7 +314,7 @@ func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string)
 	}
 	if tURI != "" {
 		// existing open proposal: this run is its next round
-		if prs, _, err := k.store.ListRecords(repo, "org.tangled.review.patch", 100, ""); err == nil {
+		if prs, _, err := k.storeFor(repo).ListRecords(repo, "org.tangled.review.patch", 100, ""); err == nil {
 			round = 1
 			for _, pr := range prs {
 				if tk, _ := pr.Value["ticket"].(string); tk == tRkey {
@@ -330,7 +332,7 @@ func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string)
 			"targetBranch": branchOf(base),
 			"createdAt":    now,
 		}
-		w, err := k.store.Create(repo, "org.tangled.track.ticket", "", ticket, editor)
+		w, err := k.storeFor(repo).Create(repo, "org.tangled.track.ticket", "", ticket, editor)
 		if err != nil {
 			return
 		}
@@ -349,7 +351,7 @@ func (k *Knot) openProposal(repo, branch, base, head, summary, todoTitle string)
 		"head":      map[string]any{"$type": "org.tangled.git.oid", "oid": head},
 		"createdAt": now,
 	}
-	_, _ = k.store.Create(repo, "org.tangled.review.patch", "", patch, editor)
+	_, _ = k.storeFor(repo).Create(repo, "org.tangled.review.patch", "", patch, editor)
 	k.emit(repo, "commit", "org.tangled.review.patch", tRkey, tCID, "", patch)
 	k.emit(repo, "commit", "org.tangled.track.ticket", tRkey, tCID, "", map[string]any{"round": round})
 }
@@ -391,7 +393,7 @@ func (k *Knot) handleSubmitPatch(w http.ResponseWriter, r *http.Request) {
 		"head":      map[string]any{"$type": "org.tangled.git.oid", "oid": body.Patch.Head.OID},
 		"createdAt": time.Now().UTC().Format(time.RFC3339),
 	}
-	res, err := k.store.Create(body.Repo, "org.tangled.review.patch", "", patch, editor)
+	res, err := k.storeFor(body.Repo).Create(body.Repo, "org.tangled.review.patch", "", patch, editor)
 	k.writeCobResult(w, res, err)
 }
 
@@ -490,6 +492,10 @@ func (k *Knot) handleRetry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 		return
 	}
+	// settle the retried run: an unsettled 'running' row wedges every
+	// future assignment (hasRunningRun gates one run per repo)
+	_, _ = k.opt.DB.Exec(`UPDATE knot_runs SET status = 'failed', ended_at = ? WHERE id = ? AND status = 'running'`,
+		time.Now().UTC().Format(time.RFC3339), body.RunID)
 	runID := newRunID()
 	_, err = k.opt.DB.Exec(
 		`INSERT INTO knot_runs (id, repo, branch, todo_line, todo_title, status, created_at) VALUES (?, ?, ?, 0, ?, 'running', ?)`,

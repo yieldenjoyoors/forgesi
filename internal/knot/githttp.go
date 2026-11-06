@@ -43,10 +43,8 @@ func (k *Knot) repoFor(w http.ResponseWriter, r *http.Request) (*repoAccount, gi
 		writeErr(w, http.StatusNotFound, "NotFound", "no such repo")
 		return nil, gitrepo.Repo{}, false
 	}
-	return acc, gitrepo.Repo{Be: k.storeBackend(), RefPrefix: "git/" + acc.Did + "/"}, true
+	return acc, k.gitRepoFor(acc.Did), true
 }
-
-func (k *Knot) storeBackend() cob.Backend { return k.be }
 
 func (k *Knot) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
 	_, repo, ok := k.repoFor(w, r)
@@ -351,7 +349,7 @@ func (k *Knot) handleReceivePack(w http.ResponseWriter, r *http.Request) {
 // publishRefsRecord writes org.tangled.git.refs (rkey 'self') with the
 // repo's current refs in git show-ref format.
 func (k *Knot) publishRefsRecord(acc *repoAccount, editor string) {
-	repo := gitrepo.Repo{Be: k.storeBackend(), RefPrefix: "git/" + acc.Did + "/"}
+	repo := k.gitRepoFor(acc.Did)
 	branches, err := repo.Branches()
 	if err != nil {
 		return
@@ -374,10 +372,10 @@ func (k *Knot) publishRefsRecord(acc *repoAccount, editor string) {
 	}
 	var wrote cob.Write
 	var werr error
-	if _, gerr := k.store.Get(acc.Did, "org.tangled.git.refs", "self"); gerr == nil {
-		wrote, werr = k.store.Put(acc.Did, "org.tangled.git.refs", "self", record, "", editor)
+	if _, gerr := k.storeFor(acc.Did).Get(acc.Did, "org.tangled.git.refs", "self"); gerr == nil {
+		wrote, werr = k.storeFor(acc.Did).Put(acc.Did, "org.tangled.git.refs", "self", record, "", editor)
 	} else {
-		wrote, werr = k.store.Create(acc.Did, "org.tangled.git.refs", "self", record, editor)
+		wrote, werr = k.storeFor(acc.Did).Create(acc.Did, "org.tangled.git.refs", "self", record, editor)
 	}
 	if werr == nil {
 		k.emit(acc.Did, "commit", "org.tangled.git.refs", "self", wrote.CID, wrote.Change, record)

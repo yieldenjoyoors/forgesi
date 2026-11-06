@@ -24,14 +24,12 @@ func TestMachineReviewCommentsVerdict(t *testing.T) {
 	if err := cob.Migrate(db); err != nil {
 		t.Fatal(err)
 	}
-	verdicts := make(chan string, 1)
 	h := New(Options{
 		Host: "forgesi.org", Version: "0.1.0",
 		Auth: ServiceAuth{V: testVerifier(key)},
 		DB:   db, MintKey: key, RunnerKey: "rk",
 		ReviewLLM: func(system, user string) (string, error) {
-			v := <-verdicts
-			return v, nil
+			return "\u2705 Looks correct: adds the fix and a test. Check the error path.", nil
 		},
 	})
 
@@ -45,11 +43,9 @@ func TestMachineReviewCommentsVerdict(t *testing.T) {
 	reqB.Header.Set("Authorization", "Bearer "+boot)
 	h.ServeHTTP(httptest.NewRecorder(), reqB)
 
-	// drive the proposal path directly (the same code runDone uses)
+	// drive the proposal path directly (the same code runDone uses);
+	// the review runs synchronously inside it
 	h.openProposal("did:web:forgesi.org:repo:rv", "agent/3", "", "abc123", "wrote the login fix", "fix the login loop")
-
-	// feed the verdict; the reviewer goroutine writes the comment
-	verdicts <- "✅ Looks correct: adds the fix and a test. Check the error path."
 
 	// comment lands on the ticket
 	found := false

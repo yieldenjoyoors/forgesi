@@ -106,10 +106,24 @@ func newMinigit(t *testing.T) *httptest.Server {
 		}
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		_, _ = w.Write(packline.Pkt("packfile\n"))
+		// serve every explicitly-wanted object we hold (like real
+		// Artifacts: stored objects answer wants, reachable or not)
+		// plus their git closures.
 		var objs []packfile.Object
 		seen := map[string]bool{}
 		for _, want := range wants {
 			closure(g.be, want, seen, &objs)
+		}
+		// explicitly-wanted objects ride along even when the closure
+		// walk already covered them (real servers answer any stored oid)
+		for _, want := range wants {
+			if !seen[want] {
+				if obj, err := g.be.GetObject(want); err == nil {
+					p, _ := gitrepo.Parse(obj)
+					objs = append(objs, packfile.Object{Type: packfile.TypeOf(p.Type), Data: p.Data, OID: want})
+					seen[want] = true
+				}
+			}
 		}
 		pack, err := packfile.Encode(objs)
 		if err != nil {

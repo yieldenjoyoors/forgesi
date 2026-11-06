@@ -5,6 +5,11 @@
 package knot
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -12,8 +17,11 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 
+	"github.com/yieldenjoyoors/forgesi/internal/artifacts"
+	"github.com/yieldenjoyoors/forgesi/internal/artifactstore"
 	"github.com/yieldenjoyoors/forgesi/internal/atauth"
 	"github.com/yieldenjoyoors/forgesi/internal/cob"
+	"github.com/yieldenjoyoors/forgesi/internal/gitrepo"
 )
 
 // Options configures the knot surface. Host is the public origin without a
@@ -37,6 +45,11 @@ type Options struct {
 	MintKey *btcec.PrivateKey
 	// AppHTML is the console shell; set to serve SPA routes under /app/*.
 	AppHTML []byte
+	// Artifacts, when set, makes per-repo Cloudflare Artifacts repos the
+	// storage authority for git objects, refs and COBs (one Artifacts
+	// repo per knot repo, bare refs). D1 keeps the registry, event log
+	// and run ledger. Nil = the legacy single-D1 backend.
+	Artifacts *ArtifactsConfig
 	// Starter launches agent runs (the runner fetch in production). nil =
 	// pull mode: runners ask fleet.nextRun.
 	Starter func(run RunRequest) error
@@ -57,11 +70,71 @@ type Knot struct {
 	store    *cob.Store
 	registry RepoStore
 	be       cob.Backend // shared with the git transport
+
+	// per-repo Artifacts storage (nil = legacy single-D1 backend)
+	artClient *artifacts.Client
+	artBacks  sync.Map // repoDID -> *artifactstore.Backend
+	artStores sync.Map // repoDID -> *cob.Store (scoped)
+}
+
+// artifactsOn reports per-repo Artifacts storage.
+func (k *Knot) artifactsOn() bool { return k.artClient != nil }
+
+// repoArtifactsName maps a repo DID to its Artifacts repo name.
+func (k *Knot) repoArtifactsName(repoDID string) string {
+	return strings.TrimPrefix(repoDID, "did:web:"+k.opt.Host+":repo:")
+}
+
+// repoBackend returns the storage backend for one repo: the per-repo
+// Artifacts backend when configured, else the shared D1 backend.
+func (k *Knot) repoBackend(repoDID string) cob.Backend {
+	if !k.artifactsOn() {
+		return k.be
+	}
+	if v, ok := k.artBacks.Load(repoDID); ok {
+		return v.(*artifactstore.Backend)
+	}
+	b := artifactstore.New(k.artClient, k.repoArtifactsName(repoDID))
+	k.artBacks.Store(repoDID, b)
+	return b
+}
+
+// storeFor returns the COB store serving one repo's records: scoped to
+// its Artifacts backend when configured, else the shared D1 store.
+func (k *Knot) storeFor(repoDID string) *cob.Store {
+	if !k.artifactsOn() {
+		return k.store
+	}
+	if v, ok := k.artStores.Load(repoDID); ok {
+		return v.(*cob.Store)
+	}
+	st, err := cob.NewScoped(k.repoBackend(repoDID), k.did())
+	if err != nil {
+		return k.store // unreachable with real backends
+	}
+	k.artStores.Store(repoDID, st)
+	return st
+}
+
+// gitRepoFor is the git seam: one repo's gitrepo with the right backend
+// and ref layout (bare refs on Artifacts, namespaced on D1).
+func (k *Knot) gitRepoFor(did string) gitrepo.Repo {
+	if k.artifactsOn() {
+		return gitrepo.Repo{Be: k.repoBackend(did)}
+	}
+	return gitrepo.Repo{Be: k.be, RefPrefix: "git/" + did + "/"}
 }
 
 // New builds the knot handler. A nil Auth fails closed: every write is
 // 401 until a real authorizer is wired. A nil DB falls back to in-memory
 // storage (unit tests); production wires D1.
+// ArtifactsConfig names the Artifacts namespace the knot stores under.
+type ArtifactsConfig struct {
+	AccountID string
+	Namespace string
+	APIToken  string
+}
+
 func New(opt Options) *Knot {
 	if opt.Auth == nil {
 		opt.Auth = RejectAuthorizer{}
@@ -82,6 +155,18 @@ func New(opt Options) *Knot {
 		reg = newMemoryRepoStore()
 	}
 	k := &Knot{opt: opt, mux: http.NewServeMux(), store: st, registry: reg, be: be}
+	if opt.Artifacts != nil {
+		k.artClient = artifacts.New(artifacts.Config{
+			AccountID: opt.Artifacts.AccountID,
+			Namespace: opt.Artifacts.Namespace,
+			APIToken:  opt.Artifacts.APIToken,
+			HTTP:      outboundHTTP,
+		})
+		if err := k.artClient.EnsureNamespace(context.Background(), "eu"); err != nil {
+			// metadata still serves; git ops will surface the error
+			fmt.Fprintln(os.Stderr, "knot: artifacts namespace:", err)
+		}
+	}
 	k.routes()
 	k.records()
 	k.gitRoutes()

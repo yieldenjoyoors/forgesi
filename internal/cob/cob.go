@@ -103,6 +103,19 @@ func objectID(content []byte) string {
 type Store struct {
 	be      Backend
 	knotDID string
+	// scoped stores belong to ONE repo account (a per-repo Artifacts
+	// backend) and keep COB refs without the repo-DID segment.
+	scoped bool
+}
+
+// NewScoped builds a store bound to one repo account's backend.
+func NewScoped(be Backend, knotDID string) (*Store, error) {
+	s, err := New(be, knotDID)
+	if err != nil {
+		return nil, err
+	}
+	s.scoped = true
+	return s, nil
 }
 
 // New builds a record store.
@@ -158,7 +171,7 @@ func (s *Store) Create(repo, collection, rkey string, record map[string]any, edi
 			return Write{}, fmt.Errorf("%w: bad rkey %q", ErrBadRequest, rkey)
 		}
 	}
-	ref := cobRef(repo, collection, rkey)
+	ref := s.cobRefFor(repo, collection, rkey)
 	if _, ok, _ := s.be.RefHead(ref); ok {
 		return Write{}, fmt.Errorf("%w: record already exists", ErrInvalidSwap)
 	}
@@ -175,7 +188,7 @@ func (s *Store) Create(repo, collection, rkey string, record map[string]any, edi
 
 // Put replaces a record version, guarded by the optional swap cid.
 func (s *Store) Put(repo, collection, rkey string, record map[string]any, swapCID, editor string) (Write, error) {
-	ref := cobRef(repo, collection, rkey)
+	ref := s.cobRefFor(repo, collection, rkey)
 	head, ok, err := s.be.RefHead(ref)
 	if err != nil {
 		return Write{}, err
@@ -206,7 +219,7 @@ func (s *Store) Put(repo, collection, rkey string, record map[string]any, swapCI
 
 // Delete tombstones a record; the chain keeps history for listVersions.
 func (s *Store) Delete(repo, collection, rkey, swapCID, editor string) (Write, error) {
-	ref := cobRef(repo, collection, rkey)
+	ref := s.cobRefFor(repo, collection, rkey)
 	head, ok, err := s.be.RefHead(ref)
 	if err != nil {
 		return Write{}, err
@@ -236,7 +249,7 @@ func (s *Store) Delete(repo, collection, rkey, swapCID, editor string) (Write, e
 
 // Get materializes the current record version.
 func (s *Store) Get(repo, collection, rkey string) (Record, error) {
-	ref := cobRef(repo, collection, rkey)
+	ref := s.cobRefFor(repo, collection, rkey)
 	head, ok, err := s.be.RefHead(ref)
 	if err != nil {
 		return Record{}, err
@@ -256,7 +269,7 @@ func (s *Store) Get(repo, collection, rkey string) (Record, error) {
 
 // ListVersions walks the chain oldest-first.
 func (s *Store) ListVersions(repo, collection, rkey string, limit int, cursor string) ([]Version, error) {
-	ref := cobRef(repo, collection, rkey)
+	ref := s.cobRefFor(repo, collection, rkey)
 	head, ok, err := s.be.RefHead(ref)
 	if err != nil || !ok {
 		if err != nil {
@@ -377,6 +390,15 @@ func cobRef(repo, collection, rkey string) string {
 	return "refs/cobs/" + repo + "/" + collection + "/" + rkey
 }
 
+// cobRefFor reshapes the ref for scoped (single-repo) stores: no repo
+// segment, matching the bare refs layout of per-repo Artifacts repos.
+func (s *Store) cobRefFor(repo, collection, rkey string) string {
+	if s.scoped {
+		return "refs/cobs/" + collection + "/" + rkey
+	}
+	return cobRef(repo, collection, rkey)
+}
+
 func gitObject(kind string, content []byte) []byte {
 	header := kind + " " + strconv.Itoa(len(content)) + "\x00"
 	return append([]byte(header), content...)
@@ -486,7 +508,7 @@ func (s *Store) ListRefs(prefix, after string, limit int) ([]string, error) {
 // ListRecords materializes every live record in a collection. Live only —
 // tombstoned chains are skipped (atproto never lists deleted records).
 func (s *Store) ListRecords(repo, collection string, limit int, cursor string) ([]Record, []string, error) {
-	prefix := cobRef(repo, collection, "")
+	prefix := s.cobRefFor(repo, collection, "")
 	refs, err := s.be.ListRefs(prefix, cursor, limit+1)
 	if err != nil {
 		return nil, nil, err

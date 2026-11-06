@@ -238,7 +238,7 @@ func (k *Knot) completeTodoOnMerge(repo, ticketRkey, editor string) {
 	if ticketRkey == "" {
 		return
 	}
-	rec, err := k.store.Get(repo, "org.tangled.track.ticket", ticketRkey)
+	rec, err := k.storeFor(repo).Get(repo, "org.tangled.track.ticket", ticketRkey)
 	if err != nil {
 		return
 	}

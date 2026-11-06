@@ -186,7 +186,7 @@ func (k *Knot) handleListRecords(w http.ResponseWriter, r *http.Request) {
 	if cursor != "" {
 		cursor = prefix + cursor
 	}
-	recs, rkeys, err := k.store.ListRecords(repo, collection, limit, cursor)
+	recs, rkeys, err := k.storeFor(repo).ListRecords(repo, collection, limit, cursor)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 		return
@@ -260,6 +260,15 @@ func (k *Knot) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "InvalidSwap", "repo already exists")
 		return
 	}
+	if k.artifactsOn() {
+		if _, err := k.artClient.EnsureRepo(r.Context(), body.Name); err != nil {
+			// leave the registry row; a retry of the same name hits the
+			// conflict path and the operator resolves it. Creating ghost
+			// Artifacts repos is the worse failure.
+			writeErr(w, http.StatusInternalServerError, "InternalServerError", "artifacts: "+err.Error())
+			return
+		}
+	}
 	// the ownership half of the discovery claim: manifest/self on the repo
 	// account, declaration {owner, name}. The matching declaration on the
 	// owner's PDS is what makes the repo visible under owner/slug on
@@ -273,7 +282,7 @@ func (k *Knot) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		"declaration": map[string]any{"owner": owner, "name": body.Name},
 		"createdAt":   time.Now().UTC().Format(time.RFC3339),
 	}
-	if w2, err := k.store.Create(did, "org.tangled.repo.manifest", "self", manifest, k.selfDID()); err == nil {
+	if w2, err := k.storeFor(did).Create(did, "org.tangled.repo.manifest", "self", manifest, k.selfDID()); err == nil {
 		k.emit(did, "commit", "org.tangled.repo.manifest", w2.Rkey, w2.CID, w2.Change, manifest)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"did": did, "key": k.opt.PublicKeyMultibase})
@@ -303,7 +312,7 @@ func (k *Knot) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := k.store.Create(body.Repo, body.Collection, body.Rkey, body.Record, editor)
+	res, err := k.storeFor(body.Repo).Create(body.Repo, body.Collection, body.Rkey, body.Record, editor)
 	if err == nil {
 		k.emit(body.Repo, "commit", body.Collection, res.Rkey, res.CID, res.Change, body.Record)
 	}
@@ -315,7 +324,7 @@ func (k *Knot) handlePutRecord(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := k.store.Put(body.Repo, body.Collection, body.Rkey, body.Record, body.SwapRecord, editor)
+	res, err := k.storeFor(body.Repo).Put(body.Repo, body.Collection, body.Rkey, body.Record, body.SwapRecord, editor)
 	if err == nil {
 		k.emit(body.Repo, "commit", body.Collection, body.Rkey, res.CID, res.Change, body.Record)
 	}
@@ -327,7 +336,7 @@ func (k *Knot) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := k.store.Delete(body.Repo, body.Collection, body.Rkey, body.SwapRecord, editor)
+	res, err := k.storeFor(body.Repo).Delete(body.Repo, body.Collection, body.Rkey, body.SwapRecord, editor)
 	if err == nil {
 		k.emit(body.Repo, "commit", body.Collection, body.Rkey, res.CID, res.Change, nil)
 	}
@@ -351,7 +360,7 @@ func (k *Knot) writeCobResult(w http.ResponseWriter, res cob.Write, err error) {
 
 func (k *Knot) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	rec, err := k.store.Get(q.Get("repo"), q.Get("collection"), q.Get("rkey"))
+	rec, err := k.storeFor(q.Get("repo")).Get(q.Get("repo"), q.Get("collection"), q.Get("rkey"))
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -380,7 +389,7 @@ func (k *Knot) handleListRecordVersions(w http.ResponseWriter, r *http.Request) 
 			limit = int(n)
 		}
 	}
-	vs, err := k.store.ListVersions(parts[0], parts[1], parts[2], limit, r.URL.Query().Get("cursor"))
+	vs, err := k.storeFor(parts[0]).ListVersions(parts[0], parts[1], parts[2], limit, r.URL.Query().Get("cursor"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "RecordNotFound", "no versions")
 		return

@@ -80,7 +80,13 @@ func (c *Client) call(ctx context.Context, method, u string, body any) (int, map
 		}
 		payload = b
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(payload))
+	var bodyReader io.Reader
+	if len(payload) > 0 {
+		bodyReader = bytes.NewReader(payload)
+	}
+	// a nil body matters: wasm fetch rejects GET/HEAD requests that
+	// carry ANY body, even an empty reader
+	req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -172,6 +178,31 @@ func (c *Client) EnsureRepo(ctx context.Context, name string) (bool, error) {
 	return false, errOf(status, v, "ensure repo "+name)
 }
 
+// DeleteRepo removes the repo and its contents.
+func (c *Client) DeleteRepo(ctx context.Context, name string) error {
+	status, v, err := c.call(ctx, http.MethodDelete, c.reposBase()+"/"+name, nil)
+	if err != nil {
+		return err
+	}
+	return errOf(status, v, "delete repo "+name)
+}
+
+// pktText flattens pkt-lined status output for error reporting.
+func pktText(b []byte) string {
+	var sb strings.Builder
+	r := packline.NewReader(bytes.NewReader(b))
+	for {
+		payload, kind, err := r.Next()
+		if err != nil || kind == "flush" {
+			break
+		}
+		if kind == "data" {
+			sb.Write(payload)
+		}
+	}
+	return sb.String()
+}
+
 // MintToken mints a repo-scoped git token ("read" or "write").
 func (c *Client) MintToken(ctx context.Context, repo, scope string, ttlSeconds uint64) (string, error) {
 	u := fmt.Sprintf("%s/%s/artifacts/namespaces/%s/tokens", c.cfg.apiBase(), c.cfg.AccountID, c.cfg.Namespace)
@@ -211,6 +242,7 @@ func (c *Client) LSRemote(ctx context.Context, repo, token string) ([]Ref, error
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept-Encoding", "identity") // wire protocol, not text
 	res, err := c.cfg.HTTP.Do(req)
 	if err != nil {
 		return nil, err
@@ -262,6 +294,7 @@ func (c *Client) Push(ctx context.Context, repo, token, oldOID, newOID, ref stri
 	}
 	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept-Encoding", "identity") // wire protocol, not text
 	res, err := c.cfg.HTTP.Do(req)
 	if err != nil {
 		return err
@@ -273,6 +306,59 @@ func (c *Client) Push(ctx context.Context, repo, token, oldOID, newOID, ref stri
 	}
 	if !strings.Contains(string(raw), "unpack ok") {
 		return fmt.Errorf("push rejected: %s", raw[:min(len(raw), 300)])
+	}
+	return nil
+}
+
+// RefUpdate is one command of a multi-ref push.
+type RefUpdate struct {
+	Name string
+	Old  string // zeros for a create
+	New  string
+}
+
+// PushMany updates several refs in one receive-pack (one round trip).
+// The remote compares each Old against the current value (CAS).
+func (c *Client) PushMany(ctx context.Context, repo, token string, updates []RefUpdate, pack []byte) error {
+	var body bytes.Buffer
+	first := true
+	for _, u := range updates {
+		line := u.Old + " " + u.New + " " + u.Name
+		if first {
+			line += "\x00 report-status" // caps belong to the first command only
+			first = false
+		}
+		body.Write(packline.EncodePkt([]byte(line + "\n")))
+	}
+	body.Write(packline.FlushPkt())
+	if len(pack) > 0 {
+		body.Write(pack)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.GitURL(repo)+"/git-receive-pack", &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept-Encoding", "identity") // wire protocol, not text
+	res, err := c.cfg.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode >= 300 {
+		return fmt.Errorf("push %s: %d %s", repo, res.StatusCode, raw[:min(len(raw), 200)])
+	}
+	if !strings.Contains(string(raw), "unpack ok") {
+		return fmt.Errorf("push rejected: %s", raw[:min(len(raw), 300)])
+	}
+	if i := strings.Index(string(raw), "unpack ok"); i >= 0 {
+		rest := pktText(raw[i:])
+		if ng := strings.Index(rest, "ng "); ng >= 0 {
+			line := rest[ng:min(ng+120, len(rest))]
+			return fmt.Errorf("push rejected (per-ref): %s", line)
+		}
 	}
 	return nil
 }

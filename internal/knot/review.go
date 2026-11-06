@@ -32,13 +32,16 @@ func (k *Knot) reviewAsync(repo, ticketURI, ticketCID, base, head, summary strin
 	if k.opt.ReviewLLM == nil {
 		return
 	}
+	// waitUntil survives the client disconnecting (the runner aborts
+	// its runDone fetch after 30s); a synchronous review would be
+	// cancelled with it.
 	waitUntilHook(func() {
 		defer func() {
 			if rec := recover(); rec != nil {
 				fmt.Fprintln(os.Stderr, "review panicked:", rec)
 			}
 		}()
-		gr := gitrepo.Repo{Be: k.be, RefPrefix: "git/" + repo + "/"}
+		gr := k.gitRepoFor(repo)
 		dec := policyDecision(gr, base, head)
 		system := reviewSystem
 		if !dec.HumanRequired {
@@ -147,7 +150,7 @@ func (k *Knot) postComment(repo, ticketURI, ticketCID, text, editor string) {
 		"body":      map[string]any{"$type": "org.tangled.markup.markdown", "text": text},
 		"createdAt": time.Now().UTC().Format(time.RFC3339),
 	}
-	w, err := k.store.Create(repo, "org.tangled.feed.comment", "", comment, editor)
+	w, err := k.storeFor(repo).Create(repo, "org.tangled.feed.comment", "", comment, editor)
 	if err != nil {
 		return
 	}

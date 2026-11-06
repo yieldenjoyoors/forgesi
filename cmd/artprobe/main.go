@@ -24,6 +24,7 @@ func main() {
 	token := flag.String("token", "", "cloudflare api token")
 	ns := flag.String("ns", "forgesi", "artifacts namespace")
 	repo := flag.String("repo", "probe", "repo name")
+	del := flag.Bool("delete", false, "delete the repo instead of probing")
 	flag.Parse()
 	if *account == "" || *token == "" {
 		fmt.Println("account and token required")
@@ -31,6 +32,15 @@ func main() {
 	}
 	ctx := context.Background()
 	c := artifacts.New(artifacts.Config{AccountID: *account, Namespace: *ns, APIToken: *token})
+
+	if *del {
+		if err := c.DeleteRepo(ctx, *repo); err != nil {
+			fmt.Println("delete:", err)
+			os.Exit(1)
+		}
+		fmt.Println("deleted", *ns+"/"+*repo)
+		return
+	}
 
 	if err := c.EnsureNamespace(ctx, "eu"); err != nil {
 		fmt.Println("namespace:", err)

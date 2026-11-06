@@ -157,7 +157,7 @@ func (k *Knot) handleGetLatestCommit(w http.ResponseWriter, r *http.Request) {
 // used by slingshot-style record fetchers).
 func (k *Knot) handleSyncGetRecord(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	rec, err := k.store.Get(q.Get("did"), q.Get("collection"), q.Get("rkey"))
+	rec, err := k.storeFor(q.Get("did")).Get(q.Get("did"), q.Get("collection"), q.Get("rkey"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "RecordNotFound", "record not found")
 		return
